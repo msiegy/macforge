@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  macforge:
+    build: .
+    image: macforge:latest
+    container_name: macforge
+    network_mode: host
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./data:/app/data
+      - ./profiles:/app/profiles:ro
+    restart: unless-stopped
+    # Interface selection — auto-detected by default; override via .env if needed.
+    # Copy .env.example to .env and set values for non-standard NIC names or
+    # multi-instance deployments. Most users can leave this section untouched.
+    environment:
+      - MACFORGE_DATA_IFACE=${MACFORGE_DATA_IFACE:-}
+      - MACFORGE_IFACE=${MACFORGE_IFACE:-}
+      - MACFORGE_INSTANCE_ID=${MACFORGE_INSTANCE_ID:-}
+    command: ["--mode", "web"]
+
+  # Optional: step-ca sidecar for SCEP/EST enrollment
+  # Uncomment the section below to enable enterprise PKI features.
+  # After first start, add a SCEP provisioner:
+  #   docker exec -it macforge-step-ca \
+  #     step ca provisioner add macforge-scep --type=SCEP --challenge=macforge-lab
+  #
+  # step-ca:
+  #   image: smallstep/step-ca:latest
+  #   container_name: macforge-step-ca
+  #   volumes:
+  #     - step-ca-data:/home/step
+  #   ports:
+  #     - "9000:9000"
+  #   environment:
+  #     - DOCKER_STEPCA_INIT_NAME=MACforge Lab CA
+  #     - DOCKER_STEPCA_INIT_DNS_NAMES=step-ca,localhost
+  #     - DOCKER_STEPCA_INIT_PROVISIONER_NAME=macforge
+  #     - DOCKER_STEPCA_INIT_PASSWORD=macforge-lab-password
+  #   restart: unless-stopped

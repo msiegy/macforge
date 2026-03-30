@@ -1,0 +1,89 @@
+- name: "Roku Streaming Stick"
+  mac: "8A:C7:2E:AB:09:01"
+  personality:
+    category: "iot"
+    os: "Roku OS"
+    device_type: "Roku streaming device"
+  dhcp:
+    hostname: ""
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 55]
+    param_request_list: [1, 3, 6, 15, 12]
+  ssdp:
+    device_type: "urn:roku-com:device:player:1-0"
+    friendly_name: "Roku Streaming Stick"
+  traffic_interval_sec: 30
+
+- name: "Amazon Echo"
+  mac: "34:D2:70:AB:0A:01"
+  personality:
+    category: "iot"
+    os: "Fire OS"
+    device_type: "Amazon Echo"
+  dhcp:
+    hostname: "Echo-MACforge"
+    vendor_class: "dhcpcd-6.8.2"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 3, 6, 28, 29, 42, 43, 108, 114, 119]
+  traffic_interval_sec: 30
+
+- name: "Google Nest Thermostat"
+  mac: "3C:5A:B4:AB:0B:01"
+  personality:
+    category: "iot"
+    os: "Nest OS"
+    device_type: "Google Nest thermostat"
+  dhcp:
+    hostname: "Nest-Thermostat"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 55]
+    param_request_list: [1, 3, 6, 15]
+  traffic_interval_sec: 30
+
+- name: "Samsung Smart TV"
+  mac: "FA:63:E1:AB:0C:01"
+  personality:
+    category: "iot"
+    os: "Tizen"
+    device_type: "Samsung Smart TV"
+  dhcp:
+    hostname: ""
+    vendor_class: "udhcp 1.x-VD Linux VDLinux"
+    client_id: "mac"
+    options_order: [53, 61, 60, 55]
+    param_request_list: [1, 3, 6, 12, 28, 29, 42]
+  ssdp:
+    device_type: "urn:samsung.com:device:RemoteControlReceiver:1"
+    friendly_name: "Samsung Smart TV"
+  traffic_interval_sec: 30
+
+- name: "Crestron TouchScreen"
+  mac: "C4:42:68:AB:0D:01"
+  personality:
+    category: "iot"
+    os: "Crestron OS"
+    device_type: "Crestron TouchScreen"
+  dhcp:
+    hostname: "tscw-device"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 3, 6, 15, 12]
+  traffic_interval_sec: 30
+
+- name: "Crestron DMP"
+  mac: "C4:42:68:AB:0E:01"
+  personality:
+    category: "iot"
+    os: "Crestron OS"
+    device_type: "Crestron DMP"
+  dhcp:
+    hostname: "dmps-device"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 3, 6, 15, 12]
+  traffic_interval_sec: 30

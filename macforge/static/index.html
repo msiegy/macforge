@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MACforge</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="toastContainer" class="toast-container"></div>
+
+  <header>
+    <div class="header-left">
+      <h1>MACforge</h1>
+      <span class="subtitle">MAB &amp; 802.1X Emulator</span>
+    </div>
+    <div class="header-right">
+      <button class="interface-badge" id="interfaceBadge" onclick="toggleIfacePanel()" title="Click to view/change interfaces">--</button>
+      <button class="readiness-btn" id="readinessBtn" onclick="showReadinessDetail()" title="System readiness — click for details">⏳ checking…</button>
+      <label class="toggle-switch" title="Enable SNMP responder for device profiling">
+        <input type="checkbox" id="snmpToggle">
+        <span class="toggle-slider"></span>
+        <span class="toggle-label" id="snmpLabel">SNMP</span>
+      </label>
+      <button class="btn btn-connect-all" id="connectAllBtn">Connect All</button>
+      <button class="btn btn-disconnect-all" id="disconnectAllBtn">Disconnect All</button>
+    </div>
+  </header>
+
+  <!-- ── Interface Panel (toggled by badge click) ─────────────────── -->
+  <div id="ifacePanel" class="iface-panel" style="display:none">
+    <div class="iface-panel-header">
+      <span class="iface-panel-title">Network Interfaces</span>
+      <button class="iface-panel-close" onclick="toggleIfacePanel()" title="Close">&#x2715;</button>
+    </div>
+    <div id="ifacePanelBody" class="iface-panel-body">
+      <div class="iface-loading">Loading…</div>
+    </div>
+  </div>
+
+  <nav class="tab-bar">
+    <button class="tab active" data-tab="devices">
+      <span class="tab-icon">&#9632;</span> Devices
+      <span class="tab-count" id="tabDeviceCount">0</span>
+    </button>
+    <button class="tab" data-tab="certs">
+      <span class="tab-icon">&#128274;</span> Certificates
+      <span class="tab-count" id="tabCertCount">0</span>
+    </button>
+    <button class="tab" data-tab="logs">
+      <span class="tab-icon">&#9776;</span> Packet Log
+      <span class="tab-count" id="tabLogCount">0</span>
+    </button>
+  </nav>
+
+  <main>
+    <!-- ── Devices Tab ────────────────────────────────────── -->
+    <div class="tab-pane active" id="pane-devices">
+
+      <div class="device-section" id="dot1xSection">
+        <div class="section-header section-header-dot1x">
+          <div class="section-title-row">
+            <span class="section-icon">&#128274;</span>
+            <h2>802.1X Endpoints</h2>
+            <span class="section-count" id="dot1xCount">0</span>
+          </div>
+          <div class="section-actions">
+            <button class="btn btn-sm btn-new-device" onclick="openConfigDrawer(null,'dot1x')">+ New</button>
+            <button class="btn btn-sm btn-section-connect" onclick="connectSection('dot1x')">Connect All</button>
+            <button class="btn btn-sm btn-section-disconnect" onclick="disconnectSection('dot1x')">Disconnect All</button>
+          </div>
+        </div>
+        <div class="devices-grid" id="dot1xGrid">
+          <div class="empty-section">No 802.1X endpoints configured. Click <strong>+ New</strong> or use the gear button on any MAB device.</div>
+        </div>
+      </div>
+
+      <div class="device-section" id="mabSection">
+        <div class="section-header section-header-mab">
+          <div class="section-title-row">
+            <span class="section-icon">&#128268;</span>
+            <h2>MAB Endpoints</h2>
+            <span class="section-count" id="mabCount">0</span>
+          </div>
+          <div class="section-actions">
+            <button class="btn btn-sm btn-new-device" onclick="openConfigDrawer(null,'mab')">+ New</button>
+            <button class="btn btn-sm btn-section-connect" onclick="connectSection('mab')">Connect All</button>
+            <button class="btn btn-sm btn-section-disconnect" onclick="disconnectSection('mab')">Disconnect All</button>
+          </div>
+        </div>
+        <div class="devices-grid" id="mabGrid">
+          <div class="empty-section">No MAB endpoints loaded. Click <strong>+ New</strong> to create one.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Certificates Tab ──────────────────────────────────── -->
+    <div class="tab-pane" id="pane-certs">
+      <div class="cert-page">
+
+        <!-- Page Header -->
+        <div class="cert-page-header">
+          <div>
+            <h1 class="cert-page-title">Certificates</h1>
+            <p class="cert-page-subtitle">Centralized certificate authority and lifecycle management.</p>
+          </div>
+        </div>
+
+        <!-- ── Section 1: Certificate Store ─────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9881;</span>
+            <h2 class="cert-section-title">Certificate Store</h2>
+            <span class="cert-store-hint">Files persist across restarts</span>
+          </div>
+          <div class="cert-table-card">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="certStoreTable">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th class="th-actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="certTableBody">
+                  <tr><td colspan="4" class="cert-table-empty">No certificates or keys stored yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Section 2: Certificate Actions ───────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#128196;</span>
+            <h2 class="cert-section-title">Certificate Actions</h2>
+          </div>
+          <div class="cert-actions-card">
+            <nav class="cert-tabs">
+              <button class="cert-tab active" data-certtab="labca" onclick="switchCertTab('labca')">Issue (Lab CA)</button>
+              <button class="cert-tab" data-certtab="import" onclick="switchCertTab('import')">Import</button>
+              <button class="cert-tab" data-certtab="csr" onclick="switchCertTab('csr')">Request (CSR)</button>
+              <button class="cert-tab" data-certtab="enterprise" onclick="switchCertTab('enterprise')">SCEP / NDES Enrollment</button>
+            </nav>
+
+            <!-- Issue (Lab CA) tab -->
+            <div class="cert-tab-pane active" id="certtab-labca">
+              <div class="cert-tab-body">
+                <!-- Lab CA Status -->
+                <div id="labCaStatus" class="labca-status-box">
+                  <div class="labca-status-empty">No Lab CA generated. Create one below to start issuing client certificates.</div>
+                </div>
+                <!-- Lab CA generation row -->
+                <div class="labca-gen-row">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">CA Common Name</label>
+                    <input type="text" class="form-input" id="labCaCN" value="MACforge Lab CA" placeholder="e.g. MACforge Lab CA">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Organization</label>
+                    <input type="text" class="form-input" id="labCaOrg" value="MACforge Lab" placeholder="e.g. MACforge Lab">
+                  </div>
+                  <button class="btn btn-accent" id="labCaGenerateBtn" onclick="generateLabCA()">Generate Lab CA</button>
+                </div>
+                <hr class="cert-divider">
+                <!-- Client Cert Issuance -->
+                <h3 class="cert-subsection-title">Issue Client Certificate</h3>
+                <div class="cert-issue-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Common Name (CN)</label>
+                    <input type="text" class="form-input" id="clientCertCN" placeholder="e.g. testuser@lab.local">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Subject Alt Name <span class="form-hint-inline">(optional)</span></label>
+                    <input type="text" class="form-input" id="clientCertSAN" placeholder="e.g. user@example.com">
+                  </div>
+                </div>
+                <div id="clientCertResult" class="cert-result"></div>
+                <div class="cert-action-row">
+                  <button class="btn btn-accent" onclick="generateClientCert()">Generate &amp; Deploy</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Import tab -->
+            <div class="cert-tab-pane" id="certtab-import">
+              <div class="cert-tab-body">
+                <div class="cert-import-grid">
+                  <div>
+                    <h3 class="cert-subsection-title">Upload File</h3>
+                    <div class="dropzone" id="certDropzone">
+                      <div class="dropzone-icon">&#128193;</div>
+                      <div class="dropzone-label">Drop a certificate or key file here</div>
+                      <div class="dropzone-hint">Accepts .pem, .crt, .cer, .key, .p12, .pfx, .pac, .csr</div>
+                      <input type="file" id="certFileInput" accept=".pem,.crt,.cer,.key,.p12,.pfx,.pac,.csr" style="display:none">
+                    </div>
+                  </div>
+                  <div>
+                    <h3 class="cert-subsection-title">Paste PEM Content</h3>
+                    <textarea class="pem-textarea" id="pemTextarea" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIDxTCCAq2gAwIBAgIJAJC1...&#10;-----END CERTIFICATE-----"></textarea>
+                    <div class="pem-save-row">
+                      <input type="text" class="form-input" id="pemFilename" placeholder="Filename (e.g. client.pem)">
+                      <button class="btn btn-accent" onclick="savePastedPem()">Save</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- CSR tab -->
+            <div class="cert-tab-pane" id="certtab-csr">
+              <div class="cert-tab-body">
+                <p class="cert-form-desc">Generate a private key and Certificate Signing Request. Have your corporate CA sign it, then upload the signed cert via Import.</p>
+                <div class="cert-issue-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Common Name (CN)</label>
+                    <input type="text" class="form-input" id="csrCN" placeholder="e.g. testuser@corp.local">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Subject Alt Name <span class="form-hint-inline">(optional)</span></label>
+                    <input type="text" class="form-input" id="csrSAN" placeholder="e.g. user@corp.local">
+                  </div>
+                </div>
+                <div id="csrResult" class="cert-result"></div>
+                <div class="cert-action-row">
+                  <button class="btn btn-accent" onclick="generateCSR()">Generate CSR</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- SCEP / NDES Enrollment tab -->
+            <div class="cert-tab-pane" id="certtab-enterprise">
+              <div class="cert-tab-body">
+                <div id="enrollCaps" class="cert-caps-bar"></div>
+
+                <!-- Primary: AD CS / NDES SCEP -->
+                <h3 class="cert-subsection-title">AD CS / NDES Enrollment</h3>
+                <p class="cert-form-desc">Request a certificate directly from your enterprise Microsoft PKI (Active Directory Certificate Services) via the NDES SCEP endpoint. This is the most common enterprise deployment — use this if your organization runs AD CS.</p>
+                <div class="cert-issue-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">NDES URL</label>
+                    <input type="text" class="form-input" id="scepUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
+                    <span class="form-hint">The NDES SCEP endpoint on your AD CS server</span>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Challenge Password</label>
+                    <div class="password-wrapper">
+                      <input type="password" class="form-input" id="scepChallenge" placeholder="One-time password from NDES">
+                      <button type="button" class="password-toggle" onclick="togglePasswordVis('scepChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    </div>
+                    <span class="form-hint">Obtained from NDES web page or via admin. Leave blank if your NDES is configured without challenge.</span>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Common Name (CN)</label>
+                    <input type="text" class="form-input" id="scepCN" placeholder="testuser@corp.local">
+                    <span class="form-hint">Usually matches the 802.1X identity (username)</span>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Subject Alt Name <span class="form-hint-inline">(optional)</span></label>
+                    <input type="text" class="form-input" id="scepSAN" placeholder="user@corp.local or DNS:host.corp.com">
+                    <span class="form-hint">Required by some ISE policies. Use email: or DNS: prefix.</span>
+                  </div>
+                </div>
+                <div class="cert-action-row">
+                  <button class="btn btn-secondary" onclick="testNDES()">Test NDES</button>
+                  <button class="btn btn-accent" onclick="enrollSCEP()">Enroll via SCEP</button>
+                </div>
+                <div id="scepResult" class="cert-result"></div>
+
+                <hr class="cert-divider">
+
+                <!-- Secondary: step-ca (advanced / no AD CS) -->
+                <details class="stepca-details">
+                  <summary class="stepca-summary">
+                    <span class="stepca-summary-title">Alternative: step-ca <span class="stepca-badge">Advanced</span></span>
+                    <span class="stepca-summary-desc">Use this only if you don&apos;t have AD CS/NDES. Requires a step-ca Docker sidecar.</span>
+                  </summary>
+                  <div class="stepca-body">
+                    <p class="cert-form-desc">step-ca is a lightweight open-source CA you can run as a Docker container alongside MACforge. It replaces the need for a full Microsoft PKI in isolated lab environments where you have no access to AD CS/NDES.</p>
+                    <div class="cert-issue-grid">
+                      <div class="form-group">
+                        <label class="form-label cert-field-label">step-ca URL</label>
+                        <input type="text" class="form-input" id="stepCaUrl" value="https://step-ca:9000">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label cert-field-label">Provisioner</label>
+                        <input type="text" class="form-input" id="stepCaProv" value="macforge">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label cert-field-label">CA Fingerprint <span class="form-hint-inline">(optional)</span></label>
+                        <input type="text" class="form-input" id="stepCaFP" placeholder="SHA-256 fingerprint">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label cert-field-label">Common Name (CN)</label>
+                        <input type="text" class="form-input" id="stepCaCN" placeholder="testuser@lab.local">
+                      </div>
+                    </div>
+                    <div class="cert-action-row">
+                      <button class="btn btn-accent" onclick="enrollStepCA()">Enroll via step-ca</button>
+                    </div>
+                    <div id="stepCaResult" class="cert-result"></div>
+                  </div>
+                </details>
+
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Section 3: Advanced Integrations ─────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9733;</span>
+            <h2 class="cert-section-title">Advanced Integrations</h2>
+          </div>
+          <div class="integ-accordion">
+            <!-- ISE Integration -->
+            <div class="integ-item" id="iseIntegItem">
+              <button class="integ-item-header" onclick="toggleIntegration('ise')">
+                <div class="integ-item-left">
+                  <img src="/static/ise-logo.png" class="integ-item-icon" alt="Cisco ISE" width="16" height="16">
+                  <span class="integ-item-label">Cisco ISE Integration</span>
+                </div>
+                <span class="integ-chevron" id="iseChevron">&#9660;</span>
+              </button>
+              <div class="integ-item-body" id="iseBody" style="display:none">
+                <div class="ise-panel-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">ISE Hostname / IP</label>
+                    <input type="text" class="form-input" id="iseHostname" placeholder="ise.lab.local or 10.0.0.100">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">API Username</label>
+                    <input type="text" class="form-input" id="iseUsername" placeholder="OpenAPI admin account">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">API Password</label>
+                    <div class="password-wrapper">
+                      <input type="password" class="form-input" id="isePassword" placeholder="Password">
+                      <button type="button" class="password-toggle" onclick="togglePasswordVis('isePassword')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="form-group form-toggle">
+                    <label class="form-label cert-field-label">Verify TLS</label>
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="iseVerifyTls">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="ise-panel-actions">
+                  <button class="btn btn-save" onclick="saveISEConfig()">Save Settings</button>
+                  <button class="btn btn-section-connect" onclick="testISEConnection()">Test Connection</button>
+                  <button class="btn btn-accent" onclick="pushCAtoISE()">Push CA to Trusted Store</button>
+                </div>
+                <div id="iseBarStatus" class="ise-inline-status"></div>
+                <div id="iseStatus" class="cert-result"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Packet Log Tab ─────────────────────────────────── -->
+    <div class="tab-pane" id="pane-logs">
+      <div class="log-panel log-panel-full">
+        <div class="log-header">
+          <h2>Packet Log</h2>
+          <span class="log-count" id="logCount">0 entries</span>
+        </div>
+        <div class="log-entries" id="logEntries">
+          <div class="empty-state">No packets sent yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Device Detail Panel (full-page takeover) ──────── -->
+    <div class="device-detail-panel" id="deviceDetailPanel" style="display:none">
+      <!-- Header bar -->
+      <div class="ddp-header">
+        <div class="ddp-header-left">
+          <button class="ddp-back-btn" onclick="closeDeviceDetail()">&#8592; Back</button>
+          <div class="ddp-title-block">
+            <span class="ddp-device-name" id="ddpDeviceName">—</span>
+            <span class="ddp-device-mac" id="ddpDeviceMac">—</span>
+            <span class="ddp-state-badge" id="ddpStateBadge"></span>
+          </div>
+        </div>
+        <div class="ddp-header-right">
+          <div class="ddp-coa-group" id="ddpCoaGroup" style="display:none">
+            <button class="btn btn-sm btn-coa-reauth"   onclick="sendCoA('reauth')"      title="Force re-authentication without disconnecting">&#8635; Re-auth</button>
+            <button class="btn btn-sm btn-coa-bounce"   onclick="sendCoA('port_bounce')" title="Bounce the switch port (full re-auth cycle)">&#9654; Port Bounce</button>
+            <button class="btn btn-sm btn-coa-disconnect" onclick="sendCoA('disconnect')" title="Terminate the ISE session">&#9744; Terminate</button>
+          </div>
+          <button class="btn btn-sm btn-connect-all" id="ddpConnectBtn" onclick="ddpConnectDevice()">Connect</button>
+          <button class="btn btn-sm btn-disconnect-all" id="ddpDisconnectBtn" onclick="ddpDisconnectDevice()">Disconnect</button>
+        </div>
+      </div>
+      <!-- Tab bar -->
+      <nav class="ddp-tabs">
+        <button class="ddp-tab active" data-ddptab="auth-flow"   onclick="switchDetailTab('auth-flow')">&#128274; Auth Flow</button>
+        <button class="ddp-tab"        data-ddptab="session"     onclick="switchDetailTab('session')">&#128205; Session &amp; DHCP</button>
+        <button class="ddp-tab"        data-ddptab="ise-policy"  onclick="switchDetailTab('ise-policy')">&#9729; ISE Policy</button>
+        <button class="ddp-tab"        data-ddptab="nad-probe"   onclick="switchDetailTab('nad-probe')">&#128268; NAD Probe</button>
+        <button class="ddp-tab"        data-ddptab="packets"     onclick="switchDetailTab('packets')">&#128260; Packets</button>
+      </nav>
+      <!-- Tab content -->
+      <div class="ddp-body">
+        <!-- Auth Flow -->
+        <div class="ddp-pane active" id="ddp-pane-auth-flow">
+          <div class="ddp-pane-inner">
+            <div id="ddpAuthFlowContent">
+              <div class="ddp-empty">Connect this device to capture an auth flow.</div>
+            </div>
+          </div>
+        </div>
+        <!-- Session & DHCP -->
+        <div class="ddp-pane" id="ddp-pane-session">
+          <div class="ddp-pane-inner">
+            <div id="ddpSessionContent">
+              <div class="ddp-empty">No session data available.</div>
+            </div>
+          </div>
+        </div>
+        <!-- ISE Policy (Phase 2) -->
+        <div class="ddp-pane" id="ddp-pane-ise-policy">
+          <div class="ddp-pane-inner">
+            <div class="ddp-section-hdr">Session Data</div>
+            <div id="ddpIseSessionContent"><div class="ddp-empty">Click Fetch to load from ISE.</div></div>
+            <button class="btn btn-sm btn-accent ddp-fetch-btn" id="ddpIseSessionBtn" onclick="fetchIseSession()">Fetch Session from ISE</button>
+            <div class="ddp-section-hdr" style="margin-top:24px">Endpoint Record</div>
+            <div id="ddpIseEndpointContent"><div class="ddp-empty">Click Fetch to load from ISE.</div></div>
+            <button class="btn btn-sm btn-accent ddp-fetch-btn" id="ddpIseEndpointBtn" onclick="fetchIseEndpoint()">Fetch Endpoint from ISE</button>
+            <div class="ddp-section-hdr" style="margin-top:24px">Auth History</div>
+            <div id="ddpIseHistoryContent"><div class="ddp-empty">Click Fetch to load from ISE.</div></div>
+            <button class="btn btn-sm btn-accent ddp-fetch-btn" id="ddpIseHistoryBtn" onclick="fetchIseHistory()">Fetch Auth History from ISE</button>
+            <div class="ddp-section-hdr" style="margin-top:24px">ANC Actions</div>
+            <div class="ddp-anc-group">
+              <button class="btn btn-sm btn-secondary" id="ddpAncLoadBtn" onclick="fetchAncPolicies()">Load Policies</button>
+              <select class="ddp-anc-select" id="ddpAncSelect" disabled>
+                <option disabled selected>— select policy —</option>
+              </select>
+              <button class="btn btn-sm btn-coa-bounce" id="ddpAncApplyBtn" onclick="applyAncPolicy()" disabled title="Apply selected ANC policy (triggers ISE CoA to switch)">Apply</button>
+              <button class="btn btn-sm btn-coa-disconnect" id="ddpAncClearBtn" onclick="clearAncPolicy()" title="Remove any ANC policy from this endpoint">Clear ANC</button>
+            </div>
+            <div class="ddp-anc-hint">Applying an ANC policy triggers an immediate CoA from ISE to the switch.</div>
+          </div>
+        </div>
+        <!-- NAD Probe (Phase 3) -->
+        <div class="ddp-pane" id="ddp-pane-nad-probe">
+          <div class="ddp-pane-inner">
+            <!-- Inline SSH settings (collapsed by default) -->
+            <details class="nad-config-details" id="nadConfigDetails">
+              <summary class="nad-config-summary">&#9881;&#65039; Switch SSH Settings</summary>
+              <div class="nad-config-form">
+                <div class="nad-config-row">
+                  <label class="nad-config-label" for="nadHost">Host / IP</label>
+                  <input class="nad-config-input" type="text" id="nadHost" placeholder="192.168.1.1" autocomplete="off" />
+                </div>
+                <div class="nad-config-row">
+                  <label class="nad-config-label" for="nadPort">SSH Port</label>
+                  <input class="nad-config-input nad-config-input-sm" type="text" inputmode="numeric" pattern="[0-9]*" id="nadPort" value="22" />
+                </div>
+                <div class="nad-config-row">
+                  <label class="nad-config-label" for="nadUser">Username</label>
+                  <input class="nad-config-input" type="text" id="nadUser" placeholder="admin" autocomplete="off" />
+                </div>
+                <div class="nad-config-row">
+                  <label class="nad-config-label" for="nadPass">Password</label>
+                  <input class="nad-config-input" type="password" id="nadPass" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="new-password" />
+                </div>
+                <div class="nad-config-row">
+                  <label class="nad-config-label" for="nadEnablePass">Enable Password</label>
+                  <input class="nad-config-input" type="password" id="nadEnablePass" placeholder="Optional" autocomplete="new-password" />
+                </div>
+                <div class="nad-config-row">
+                  <label class="nad-config-label" for="nadDeviceType">Device Type</label>
+                  <select class="nad-config-input" id="nadDeviceType">
+                    <option value="cisco_ios">cisco_ios (IOS / IOS-XE / IOSv)</option>
+                    <option value="cisco_xe">cisco_xe (IOS-XE explicit)</option>
+                    <option value="cisco_nxos">cisco_nxos (NX-OS)</option>
+                    <option value="cisco_s300">cisco_s300 (SG / CBS)</option>
+                    <option value="autodetect">autodetect (slower)</option>
+                  </select>
+                </div>
+                <div class="nad-config-actions">
+                  <button class="btn btn-sm btn-accent" onclick="saveNadConfig()">Save Settings</button>
+                </div>
+              </div>
+            </details>
+            <div id="ddpNadContent"><div class="ddp-empty">Click Probe Switch to query the network access device via SSH.</div></div>
+            <button class="btn btn-sm btn-accent ddp-fetch-btn" id="ddpNadProbeBtn" onclick="probeSwitchNAD()">Probe Switch</button>
+          </div>
+        </div>
+        <!-- Packets (Phase 5) -->
+        <div class="ddp-pane" id="ddp-pane-packets">
+          <div class="ddp-pane-inner">
+            <div class="ddp-packets-toolbar">
+              <button class="btn btn-sm btn-accent" id="ddpCaptureToggleBtn" onclick="togglePacketCapture()">Start Capture</button>
+              <button class="btn btn-sm btn-secondary" id="ddpPcapDownloadBtn" onclick="downloadPcap()" title="Download as .pcap for Wireshark" style="display:none">&#8681; .pcap</button>
+              <label class="pkt-filter-label" title="Show/hide ARP &amp; ICMP background noise">
+                <input type="checkbox" id="pktHideNoise" checked onchange="_reRenderPackets()"> Hide ARP/ICMP noise
+              </label>
+              <span class="ddp-packets-hint">EAPOL &#8226; DHCP &#8226; ARP &#8226; ICMP &#8212; max 200 frames</span>
+            </div>
+            <div id="ddpPacketsContent"><div class="ddp-empty">Start capture to record packets.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Unified Configure Drawer -->
+  <div class="drawer-overlay" id="configOverlay">
+    <div class="drawer" id="configDrawer">
+      <div class="drawer-header">
+        <div>
+          <h2 id="configDrawerTitle">Configure Device</h2>
+          <span class="drawer-subtitle" id="configDrawerSubtitle"></span>
+        </div>
+        <button class="drawer-close" id="configDrawerClose">&times;</button>
+      </div>
+      <div class="config-drawer-tabs">
+        <button class="config-tab active" id="configTabDevice" onclick="switchConfigTab('device')">Device</button>
+        <button class="config-tab" id="configTabDot1x" onclick="switchConfigTab('dot1x')">802.1X</button>
+      </div>
+      <div id="configReadOnlyBanner" class="config-readonly-banner" style="display:none">
+        &#9432; Device is connected &mdash; disconnect to save changes
+      </div>
+      <div class="drawer-body" id="configDrawerBody"></div>
+      <div class="drawer-footer" id="configDrawerFooter">
+        <button class="btn btn-save" id="configDrawerSave">Save</button>
+        <button class="btn btn-remove" id="configDrawerDelete" style="display:none">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

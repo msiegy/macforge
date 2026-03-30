@@ -1,0 +1,341 @@
+:root {
+  --bg: #0f1117;
+  --bg2: #1a1d27;
+  --card: #21242f;
+  --border: #2e3346;
+  --text: #e4e7ef;
+  --text2: #8b90a0;
+  --muted: #5c6070;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --blue: #4a9eff;
+  --purple: #a78bfa;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.logo {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-right: auto;
+}
+
+.status-counts {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green);
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.snmp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.snmp-toggle input { display: none; }
+
+.snmp-slider {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.snmp-slider::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.2s, background 0.2s;
+}
+
+.snmp-toggle input:checked + .snmp-slider {
+  background: rgba(52, 211, 153, 0.2);
+  border-color: var(--green);
+}
+
+.snmp-toggle input:checked + .snmp-slider::after {
+  transform: translateX(12px);
+  background: var(--green);
+}
+
+.snmp-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text2);
+}
+
+.iface-badge {
+  font-size: 10px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.action-bar {
+  display: flex;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.action-btn {
+  flex: 1;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: filter 0.1s;
+}
+
+.action-btn:active {
+  filter: brightness(0.85);
+  transform: scale(0.97);
+}
+
+.action-btn.connect-all {
+  background: var(--green);
+  color: #0f1117;
+}
+
+.action-btn.disconnect-all {
+  background: var(--red);
+  color: #fff;
+}
+
+.device-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: thin;
+}
+
+.device-list::-webkit-scrollbar { width: 4px; }
+.device-list::-webkit-scrollbar-track { background: transparent; }
+.device-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+.device-row {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(46, 51, 70, 0.5);
+  cursor: pointer;
+  gap: 6px;
+  transition: background 0.1s;
+}
+
+.device-row:active {
+  background: var(--card);
+}
+
+.device-row.expanded {
+  background: var(--card);
+  border-bottom: none;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot.stopped { background: var(--muted); }
+.dot.connecting { background: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
+.dot.online { background: var(--green); }
+.dot.disconnecting { background: var(--red); animation: pulse 1.2s ease-in-out infinite; }
+.dot.authenticating { background: var(--blue); animation: pulse 1.2s ease-in-out infinite; }
+.dot.authorized { background: var(--green); }
+.dot.auth_failed { background: var(--red); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.dev-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.dev-ip {
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: var(--text2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.dev-chevron {
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  transition: transform 0.15s;
+}
+
+.device-row.expanded .dev-chevron {
+  transform: rotate(90deg);
+}
+
+.expand-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 6px 22px;
+  background: var(--card);
+  border-bottom: 1px solid rgba(46, 51, 70, 0.5);
+}
+
+.exp-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text);
+  touch-action: manipulation;
+  transition: filter 0.1s;
+  white-space: nowrap;
+}
+
+.exp-btn:active {
+  filter: brightness(0.85);
+  transform: scale(0.96);
+}
+
+.exp-btn.act-connect {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.exp-btn.act-disconnect {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.exp-btn.act-ping {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.exp-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.ping-inline {
+  font-size: 10px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: var(--green);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.ping-inline.fail {
+  color: var(--red);
+}
+
+.ping-inline.pending {
+  color: var(--amber);
+}
+
+.detail-text {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: auto;
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.auth-tag {
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(74, 158, 255, 0.15);
+  color: var(--blue);
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+footer {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.ticker-text {
+  font-size: 10px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}

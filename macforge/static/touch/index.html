@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>MACforge Touch</title>
+  <link rel="stylesheet" href="/static/touch/touch.css">
+</head>
+<body>
+  <header>
+    <span class="logo">MACforge</span>
+    <span class="status-counts" id="statusCounts">0/0</span>
+    <label class="snmp-toggle">
+      <input type="checkbox" id="snmpToggle">
+      <span class="snmp-slider"></span>
+      <span class="snmp-label">SNMP</span>
+    </label>
+    <span class="iface-badge" id="ifaceBadge">--</span>
+  </header>
+
+  <div class="action-bar">
+    <button class="action-btn connect-all" id="connectAllBtn">Connect All</button>
+    <button class="action-btn disconnect-all" id="disconnectAllBtn">Disconnect All</button>
+  </div>
+
+  <div class="device-list" id="deviceList">
+    <!-- Device rows rendered by JS -->
+  </div>
+
+  <footer id="logTicker">
+    <span class="ticker-text">--</span>
+  </footer>
+
+  <script src="/static/touch/touch.js"></script>
+</body>
+</html>

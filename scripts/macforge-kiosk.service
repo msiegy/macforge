@@ -1,0 +1,17 @@
+[Unit]
+Description=MACforge Kiosk (Chromium on touchscreen)
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/bin/chromium
+
+[Service]
+Type=simple
+ExecStart=/opt/macforge/scripts/kiosk.sh /dev/fb1
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

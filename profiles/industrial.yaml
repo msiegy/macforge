@@ -1,0 +1,59 @@
+- name: "Siemens SIMATIC PLC"
+  mac: "00:0E:8C:AB:13:01"
+  personality:
+    category: "industrial"
+    os: "SIMATIC"
+    device_type: "Siemens SIMATIC S7-1500"
+  dhcp:
+    hostname: "S7-MF1301"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 3, 6, 15, 12]
+  snmp:
+    sys_descr: "Siemens, SIMATIC S7, CPU 1511-1 PN, 6ES7 511-1AK02-0AB0, HW: 9, FW: V2.9.4"
+    sys_object_id: "1.3.6.1.4.1.4196.1.1.5.1"
+    sys_name: "S7-MF1301"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Allen-Bradley PLC"
+  mac: "00:00:BC:AB:14:01"
+  personality:
+    category: "industrial"
+    os: "Allen-Bradley"
+    device_type: "Allen-Bradley CompactLogix"
+  dhcp:
+    hostname: ""
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 55]
+    param_request_list: [1, 3, 6]
+  snmp:
+    sys_descr: "Allen-Bradley 1769-L33ER CompactLogix 5370 Ethernet Port, FRN 33.011"
+    sys_object_id: "1.3.6.1.4.1.95.1.39"
+    sys_name: "AB-CompactLogix-01"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Honeywell Controller"
+  mac: "00:0F:7F:AB:15:01"
+  personality:
+    category: "industrial"
+    os: "Embedded"
+    device_type: "Honeywell building controller"
+  dhcp:
+    hostname: "HC-MF1501"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 55]
+    param_request_list: [1, 3, 6, 15]
+  snmp:
+    sys_descr: "Honeywell Spyder LON Controller PUB6438S"
+    sys_object_id: "1.3.6.1.4.1.3683.1.2.1"
+    sys_name: "HC-MF1501"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30

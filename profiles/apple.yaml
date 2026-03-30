@@ -1,0 +1,48 @@
+- name: "iPhone"
+  mac: "00:03:93:AB:03:01"
+  personality:
+    category: "smartphone"
+    os: "iOS 17"
+    device_type: "iPhone"
+  dhcp:
+    hostname: "iPhone"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 79, 3, 6, 15, 108, 114, 119, 252]
+  traffic_interval_sec: 30
+
+- name: "iPad"
+  mac: "10:93:E9:AB:04:01"
+  personality:
+    category: "tablet"
+    os: "iPadOS 17"
+    device_type: "iPad"
+  dhcp:
+    hostname: "iPad"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 79, 3, 6, 15, 108, 114, 119, 252]
+  traffic_interval_sec: 30
+
+- name: "MacBook Pro"
+  mac: "FC:9C:A7:AB:05:01"
+  personality:
+    category: "laptop"
+    os: "macOS 14 Sonoma"
+    device_type: "MacBook Pro"
+  dhcp:
+    hostname: "MF-MacBook-Pro"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 79, 3, 6, 15, 108, 114, 119, 252, 95, 44, 46]
+  mdns:
+    service_type: "_companion-link._tcp"
+    service_name: "MF-MacBook-Pro"
+    port: 49152
+    txt_records:
+      rpBA: "AB:CD:EF:12:34:56"
+      rpFl: "0x20000"
+  traffic_interval_sec: 30

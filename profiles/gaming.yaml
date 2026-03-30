@@ -1,0 +1,41 @@
+- name: "Nintendo Switch"
+  mac: "7C:BB:8A:AB:06:01"
+  personality:
+    category: "gaming"
+    os: "Nintendo Switch OS"
+    device_type: "Nintendo Switch"
+  dhcp:
+    hostname: ""
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 55]
+    param_request_list: [1, 3, 6, 28]
+  traffic_interval_sec: 30
+
+- name: "PlayStation 5"
+  mac: "04:5D:4B:AB:07:01"
+  personality:
+    category: "gaming"
+    os: "Orbis OS"
+    device_type: "PlayStation 5"
+  dhcp:
+    hostname: "PS5-MACforge"
+    vendor_class: "PS5"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 3, 15, 6]
+  traffic_interval_sec: 30
+
+- name: "Xbox Series X"
+  mac: "7C:ED:8D:AB:08:01"
+  personality:
+    category: "gaming"
+    os: "Xbox OS"
+    device_type: "Xbox Series X"
+  dhcp:
+    hostname: "Xbox-SystemOS"
+    vendor_class: "MSFT 5.0"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 15, 3, 6, 44, 46, 47, 31, 33, 121, 249, 252, 43]
+  traffic_interval_sec: 30

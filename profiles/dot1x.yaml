@@ -1,0 +1,57 @@
+- name: "Corporate Win11"
+  mac: "58:82:A8:D1:01:01"
+  personality:
+    category: "laptop"
+    os: "Windows 11"
+    device_type: "Corporate laptop"
+  dhcp:
+    hostname: "CORP-MF-W11-01"
+    vendor_class: "MSFT 5.0"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 3, 6, 15, 31, 33, 43, 44, 46, 47, 119, 121, 249, 252]
+  auth:
+    method: "peap-mschapv2"
+    identity: "corpuser@example.com"
+    password: "ChangeMe123"
+    anonymous_identity: "anonymous@example.com"
+    phase2: "MSCHAPV2"
+    validate_server_cert: false
+    auth_type: "user"
+    peap_version: 0
+  snmp:
+    sys_descr: "Hardware: Intel64 - Windows 11 Enterprise (Build 22631)"
+    sys_object_id: "1.3.6.1.4.1.311.1.1.3.1.1"
+    sys_name: "CORP-MF-W11-01"
+    sys_contact: "IT Department"
+    sys_location: "Building A"
+  traffic_interval_sec: 30
+
+- name: "Cisco IP Phone"
+  mac: "00:1B:54:D1:03:01"
+  personality:
+    category: "iot"
+    os: "Cisco CP"
+    device_type: "IP Phone"
+  dhcp:
+    hostname: "SEP001B54D10301"
+    vendor_class: "Cisco Systems, Inc. IP Phone CP-8845"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 66, 6, 3, 15, 150, 35]
+  auth:
+    method: "eap-fast"
+    identity: "phone-001B54D10301"
+    password: "PhonePass789"
+    phase2: "MSCHAPV2"
+    pac_provisioning: true
+    validate_server_cert: false
+    auth_type: "machine"
+  snmp:
+    sys_descr: "Cisco IP Phone CP-8845, V16, SIP"
+    sys_object_id: "1.3.6.1.4.1.9.1.2Location"
+    sys_name: "SEP001B54D10301"
+    sys_contact: ""
+    sys_location: "Lobby"
+  traffic_interval_sec: 30
+

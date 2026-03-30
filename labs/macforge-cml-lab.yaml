@@ -1,0 +1,354 @@
+annotations: []
+smart_annotations: []
+nodes:
+  - boot_disk_size: null
+    configuration:
+      - name: default
+        content: System Bridge
+    cpu_limit: null
+    cpus: null
+    data_volume: null
+    hide_links: false
+    id: n0
+    image_definition: null
+    label: bridge0
+    node_definition: external_connector
+    parameters: {}
+    priority: null
+    pyats:
+      username: null
+      password: null
+      enable_password: null
+    ram: null
+    tags: []
+    x: -440
+    y: -120
+    interfaces:
+      - id: i0
+        label: port
+        mac_address: null
+        type: physical
+        slot: 0
+  - boot_disk_size: null
+    configuration:
+      - name: user-data
+        content: |-
+          #cloud-config
+          hostname: macforge
+
+          system_info:
+            default_user:
+              name: cisco
+          password: cisco
+          chpasswd: { expire: False }
+          ssh_pwauth: True
+
+          # Standard Public NTP
+          ntp:
+            enabled: true
+            pool: [0.ubuntu.pool.ntp.org, 1.ubuntu.pool.ntp.org]
+
+          runcmd:
+            - systemctl restart systemd-timesyncd
+            - sleep 10
+
+            - git clone https://github.com/msiegy/macforge.git /home/cisco/macforge
+            - chown -R cisco:cisco /home/cisco/macforge
+
+            # HARD-CODE THE INTERFACES HERE
+            # This creates the .env file that MACforge and Docker Compose read
+            - |
+              cat << EOF > /home/cisco/macforge/.env
+              MACFORGE_IFACE=ens2
+              MACFORGE_DATA_IFACE=ens3
+              LOG_LEVEL=verbose
+              EOF
+            - chown -R cisco:cisco /home/cisco/macforge
+
+            - cd /home/cisco/macforge && bash scripts/setup-vm.sh
+      - name: network-config
+        content: |-
+          #network-config
+          version: 2
+          ethernets:
+            ens2:
+              dhcp4: true
+            ens3:
+              dhcp4: false
+              optional: true
+    cpu_limit: null
+    cpus: null
+    data_volume: null
+    hide_links: false
+    id: n1
+    image_definition: null
+    label: macforge
+    node_definition: ubuntu
+    parameters: {}
+    priority: null
+    pyats:
+      username: null
+      password: null
+      enable_password: null
+    ram: null
+    tags: []
+    x: -640
+    y: 120
+    interfaces:
+      - id: i0
+        label: ens2
+        mac_address: null
+        type: physical
+        slot: 0
+      - id: i1
+        label: ens3
+        mac_address: null
+        type: physical
+        slot: 1
+  - boot_disk_size: null
+    configuration: []
+    cpu_limit: null
+    cpus: null
+    data_volume: null
+    hide_links: false
+    id: n2
+    image_definition: null
+    label: bridge-breakout
+    node_definition: unmanaged_switch
+    parameters: {}
+    priority: null
+    pyats:
+      username: null
+      password: null
+      enable_password: null
+    ram: null
+    tags: []
+    x: -440
+    y: -40
+    interfaces:
+      - id: i0
+        label: port0
+        mac_address: null
+        type: physical
+        slot: 0
+      - id: i1
+        label: port1
+        mac_address: null
+        type: physical
+        slot: 1
+      - id: i2
+        label: port2
+        mac_address: null
+        type: physical
+        slot: 2
+      - id: i3
+        label: port3
+        mac_address: null
+        type: physical
+        slot: 3
+      - id: i4
+        label: port4
+        mac_address: null
+        type: physical
+        slot: 4
+      - id: i5
+        label: port5
+        mac_address: null
+        type: physical
+        slot: 5
+      - id: i6
+        label: port6
+        mac_address: null
+        type: physical
+        slot: 6
+      - id: i7
+        label: port7
+        mac_address: null
+        type: physical
+        slot: 7
+  - boot_disk_size: null
+    configuration:
+      - name: ios_config.txt
+        content: |-
+          ! --- MACforge CML Lab Switch Template ---
+          !
+          hostname access-switch
+          !
+          ! Standard Lab Credentials
+          username admin privilege 15 secret cisco123
+          !
+          Enable secret cisco123
+          !
+          aaa new-model
+          !
+          ! RADIUS Configuration
+          radius server RADIUS-ISE
+           address ipv4 <ISE_IP> auth-port 1812 acct-port 1813
+           key <RADIUS_KEY>
+          !
+          aaa group server radius RADIUS-ISE-GROUP
+           server name RADIUS-ISE
+          !
+          ! AAA & DOT1X Global Config
+          aaa authentication login default local
+          aaa authentication dot1x default group RADIUS-ISE-GROUP
+          aaa authorization network default group RADIUS-ISE-GROUP
+          aaa accounting dot1x default start-stop group RADIUS-ISE-GROUP
+          !
+          aaa server radius dynamic-author
+           client <ISE_IP> server-key <RADIUS_KEY>
+          !
+          dot1x system-auth-control
+          device-sensor accounting
+          device-sensor notify all-changes
+          !
+          ! Layer 2 / DHCP Setup (VLAN 101 = Client Traffic)
+          vlan 101
+           name MACforge-Clients
+          vlan 10
+           name Management
+          !
+          ip dhcp pool CLIENTS_VLAN_101
+           network 192.168.101.0 255.255.255.0
+           default-router 192.168.101.1
+           dns-server 8.8.8.8
+          !
+          ip dhcp snooping vlan 101
+          ip dhcp snooping
+          !
+          ! Management Interface
+          interface Vlan10
+           description Switch Management
+           ip address <SWITCH_MGMT_IP> <MASK>
+          !
+          ! RADIUS Source Interface
+          ip radius source-interface Vlan10
+          !
+          interface GigabitEthernet0/0
+           description UPLINK TO BRIDGE
+           switchport mode access
+           switchport access vlan 10
+           negotiation auto
+           no cdp tlv app
+           spanning-tree portfast edge trunk
+          !
+          ! MACforge Client Port (Standard MAB + 802.1X)
+          interface GigabitEthernet1/0
+           description MACforge-Emulator-Port
+           switchport access vlan 101
+           switchport mode access
+           authentication host-mode multi-auth
+           authentication order mab dot1x
+           authentication priority mab dot1x
+           authentication port-control auto
+           authentication periodic
+           authentication timer reauthenticate server
+           mab
+           dot1x pae authenticator
+           spanning-tree portfast edge
+          !
+          ! SVI for Client Gateway
+          interface Vlan101
+           ip address 192.168.101.1 255.255.255.0
+          !
+          ip route 0.0.0.0 0.0.0.0 <DEFAULT ROUTE NEXT HOP>
+          !
+          ! Final System Settings
+          ip domain-name ciscolabs.com
+          ip http server
+          ip http secure-server
+          ip ssh version 2
+          line vty 0 15
+           transport input ssh
+           login authentication default
+          !
+          end
+    cpu_limit: null
+    cpus: null
+    data_volume: null
+    hide_links: false
+    id: n3
+    image_definition: null
+    label: iosvl2-0
+    node_definition: iosvl2
+    parameters: {}
+    priority: null
+    pyats:
+      username: null
+      password: null
+      enable_password: null
+    ram: null
+    tags: []
+    x: -240
+    y: 120
+    interfaces:
+      - id: i0
+        label: Loopback0
+        mac_address: null
+        type: loopback
+      - id: i1
+        label: GigabitEthernet0/0
+        mac_address: null
+        type: physical
+        slot: 0
+      - id: i2
+        label: GigabitEthernet0/1
+        mac_address: null
+        type: physical
+        slot: 1
+      - id: i3
+        label: GigabitEthernet0/2
+        mac_address: null
+        type: physical
+        slot: 2
+      - id: i4
+        label: GigabitEthernet0/3
+        mac_address: null
+        type: physical
+        slot: 3
+      - id: i5
+        label: GigabitEthernet1/0
+        mac_address: null
+        type: physical
+        slot: 4
+links:
+  - id: l0
+    n1: n2
+    n2: n0
+    i1: i0
+    i2: i0
+    conditioning: {}
+    label: unmanaged-switch-0-port0<->ext-conn-0-port
+  - id: l1
+    n1: n2
+    n2: n1
+    i1: i1
+    i2: i0
+    conditioning: {}
+    label: unmanaged-switch-0-port1<->macforge149-ens2
+  - id: l2
+    n1: n3
+    n2: n2
+    i1: i1
+    i2: i3
+    conditioning: {}
+    label: iosvl2-0-GigabitEthernet0/0<->unmanaged-switch-0-port3
+  - id: l3
+    n1: n3
+    n2: n1
+    i1: i5
+    i2: i1
+    conditioning: {}
+    label: iosvl2-0-GigabitEthernet1/0<->macforge149-ens3
+lab:
+  description: |-
+    MACforge 802.1X/MAB Lab
+
+    This lab provides a pre-configured sandbox to test MACforge against a Cisco switch. It automates the setup of a hardened Ubuntu 24.04 node and a Layer 2 switch to simulate real-world NAC (Network Access Control) scenarios.
+  notes: ''
+  title: Macforge CML Lab
+  node_staging:
+    enabled: false
+    start_remaining: true
+    abort_on_failure: false
+  version: 0.3.1

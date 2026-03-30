@@ -1,0 +1,166 @@
+- name: "HP LaserJet Printer"
+  mac: "64:4E:D7:AB:0D:01"
+  personality:
+    category: "printer"
+    os: "JetDirect"
+    device_type: "HP LaserJet"
+  dhcp:
+    hostname: "NPI-MF0D01"
+    vendor_class: "Hewlett-Packard JetDirect"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [6, 3, 1, 15, 42, 43, 12, 44, 46, 47, 51, 119, 249]
+  mdns:
+    service_type: "_pdl-datastream._tcp"
+    service_name: "HP LaserJet MACforge"
+    port: 9100
+    txt_records:
+      ty: "HP LaserJet"
+      product: "(HP LaserJet)"
+      pdl: "application/postscript"
+  snmp:
+    sys_descr: "HP ETHERNET MULTI-ENVIRONMENT,ROM K.08.77,JETDIRECT,JH147A,EEPROM V.34.23"
+    sys_object_id: "1.3.6.1.4.1.11.2.3.9.1"
+    sys_name: "NPI-MF0D01"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Brother Printer"
+  mac: "00:1C:7A:AB:0E:01"
+  personality:
+    category: "printer"
+    os: "Brother firmware"
+    device_type: "Brother MFC"
+  dhcp:
+    hostname: "BRN-MF0E01"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [6, 3, 1, 15, 42, 43, 12, 44, 2]
+  mdns:
+    service_type: "_pdl-datastream._tcp"
+    service_name: "Brother MFC MACforge"
+    port: 9100
+    txt_records:
+      ty: "Brother MFC-L2710DW"
+      product: "(Brother MFC-L2710DW)"
+  snmp:
+    sys_descr: "Brother NC-350w, Firmware Ver.L,MFC-L2750DW series,kernel 3.4"
+    sys_object_id: "1.3.6.1.4.1.2435.2.3.9.1"
+    sys_name: "BRN-MF0E01"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Xerox VersaLink MFP"
+  mac: "9C:93:4E:AB:16:01"
+  personality:
+    category: "printer"
+    os: "ConnectKey firmware"
+    device_type: "Xerox VersaLink MFP"
+  dhcp:
+    hostname: "XRX-MF1601"
+    vendor_class: "mfg=Xerox;typ=MFP;mod=Xerox VersaLink C405;ser=MF1601;loc=;"
+    client_id: "mac"
+    options_order: [53, 61, 50, 12, 60, 55]
+    param_request_list: [1, 28, 3, 15, 6, 12, 78, 79]
+  mdns:
+    service_type: "_pdl-datastream._tcp"
+    service_name: "Xerox VersaLink C405"
+    port: 9100
+    txt_records:
+      ty: "Xerox VersaLink C405"
+      product: "(Xerox VersaLink C405)"
+      pdl: "application/postscript"
+  snmp:
+    sys_descr: "Xerox VersaLink C405 Multifunction Printer; Net 68.xxx.xx.xxx.xx.xx;Engine 68.xxx.x.xxx.xx"
+    sys_object_id: "1.3.6.1.4.1.253.8.62.1.19.2.11.1"
+    sys_name: "XRX-MF1601"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Xerox 4127 Printer"
+  mac: "9C:93:4E:AB:16:55"
+  personality:
+    category: "printer"
+    os: "Xerox firmware"
+    device_type: "Xerox WorkCentre 4127"
+  dhcp:
+    hostname: "XRX-MF1655"
+    vendor_class: "mfg=Xerox;typ=MFP;mod=Xerox-WorkCentre-4127;ser=MF1655;loc=;"
+    client_id: "mac"
+    options_order: [53, 61, 50, 12, 60, 55]
+    param_request_list: [1, 28, 3, 15, 6, 12, 78, 79]
+  mdns:
+    service_type: "_pdl-datastream._tcp"
+    service_name: "Xerox WorkCentre 4127"
+    port: 9100
+    txt_records:
+      ty: "Xerox WorkCentre 4127"
+      product: "(Xerox WorkCentre 4127)"
+      pdl: "application/postscript"
+  snmp:
+    sys_descr: "Xerox 4127 Multifunction Printer; Net 68.xxx.xx.xxx.xx.xx; Engine 68.xxx.x.xxx.xx"
+    sys_object_id: "1.3.6.1.4.1.253.8.62.1.19.2.11.1"
+    sys_name: "XRX-MF1655-Workcentre4127"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Ricoh MP C3004"
+  mac: "00:26:73:AB:17:01"
+  personality:
+    category: "printer"
+    os: "Embedded Linux"
+    device_type: "Ricoh enterprise MFP"
+  dhcp:
+    hostname: "RNP-MF1701"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 50, 12, 55]
+    param_request_list: [1, 3, 6, 12, 15, 28, 44, 47]
+  mdns:
+    service_type: "_pdl-datastream._tcp"
+    service_name: "Ricoh MP C3004"
+    port: 9100
+    txt_records:
+      ty: "Ricoh MP C3004"
+      product: "(Ricoh MP C3004)"
+      pdl: "application/postscript"
+  snmp:
+    sys_descr: "RICOH MP C3004 1.12 / RICOH Network Printer C model / RICOH Network Scanner C model"
+    sys_object_id: "1.3.6.1.4.1.367.1.1"
+    sys_name: "RNP-MF1701"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
+
+- name: "Lexmark MFP"
+  mac: "00:04:00:AB:18:01"
+  personality:
+    category: "printer"
+    os: "Lexmark Embedded"
+    device_type: "Lexmark enterprise MFP"
+  dhcp:
+    hostname: "LXK-MF1801"
+    vendor_class: "Mfg=LEXMARK;Typ=MFP;Mod=Lexmark X792de;Ser=MF1801;"
+    client_id: null
+    options_order: [53, 50, 12, 60, 55]
+    param_request_list: [1, 3, 42, 6, 7, 12, 15, 26, 51, 54, 58, 59, 190]
+  mdns:
+    service_type: "_pdl-datastream._tcp"
+    service_name: "Lexmark X792de"
+    port: 9100
+    txt_records:
+      ty: "Lexmark X792de"
+      product: "(Lexmark X792de)"
+      pdl: "application/postscript"
+  snmp:
+    sys_descr: "Lexmark X792de version NH.HS.N442 kernel 3.0.0 All-N-1"
+    sys_object_id: "1.3.6.1.4.1.641.2.1.2.1"
+    sys_name: "LXK-MF1801"
+    sys_contact: ""
+    sys_location: ""
+  traffic_interval_sec: 30
