@@ -29,6 +29,7 @@ let detailAuthFlowRendered = false;     // true once auth flow is rendered in te
 
 let iseConfigured = false;              // true when ISE hostname has been saved
 
+
 const FETCH_TIMEOUT_MS = 6000;  // abort fetch if server doesn't respond in 6s
 const FETCH_TIMEOUT_SLOW_MS = 30000;  // for slow endpoints (readiness probes ~10s)
 
@@ -2272,6 +2273,7 @@ async function loadISEConfig() {
       statusEl.textContent = data.hostname ? `Configured: ${data.hostname}` : "";
     }
     iseConfigured = !!(data.hostname && data.username);
+
   } catch (_) {}
 }
 
@@ -2597,7 +2599,7 @@ function openDeviceDetail(macDash) {
     fetchJSON(`/api/devices/${prevDash}/capture/stop`, { method: "POST" }).catch(() => {});
   }
   detailMac = macDash.replace(/-/g, ":");
-  detailActiveTab = "auth-flow";
+  detailActiveTab = "session";  // overridden below once device type is known
   detailCaptureActive = false;
   detailAuthFlowRendered = false;  // reset so fresh render occurs
   _lastPackets = [];
@@ -2623,6 +2625,11 @@ function openDeviceDetail(macDash) {
     const el = document.getElementById(id);
     if (el) el.disabled = false;
   });
+  // Clear NAD probe results so previous device's data never bleeds through
+  const nadContent = document.getElementById("ddpNadContent");
+  if (nadContent) nadContent.innerHTML = '<div class="ddp-empty">Click Probe to query the switch for this device.</div>';
+  const nadProbeBtn = document.getElementById("ddpNadProbeBtn");
+  if (nadProbeBtn) nadProbeBtn.disabled = false;
   // Reset ANC policy select
   const ancSelect = document.getElementById("ddpAncSelect");
   if (ancSelect) { ancSelect.innerHTML = "<option disabled selected>\u2014 select policy \u2014</option>"; ancSelect.disabled = true; }
@@ -2643,8 +2650,8 @@ function openDeviceDetail(macDash) {
   const dev = devices.find((d) => d.mac === mac);
   if (dev) _updateDetailHeader(dev);
 
-  // Switch to auth-flow tab
-  switchDetailTab("auth-flow");
+  // MAB devices have no auth flow — default to the session tab instead
+  switchDetailTab((dev && !dev.auth_method) ? "session" : "auth-flow");
 
   // Start faster detail-specific poll (1s)
   if (detailPollTimer) clearInterval(detailPollTimer);
@@ -3487,6 +3494,7 @@ async function fetchIseHistory() {
   }
 }
 
+
 async function sendCoA(action) {
   if (!detailMac) return;
   const macDash = detailMac.replace(/:/g, "-");
@@ -3859,7 +3867,7 @@ async function probeSwitchNAD() {
   if (btn) btn.disabled = true;
   if (container) container.innerHTML = '<div class="ddp-ise-loading">&#8987; Probing switch via SSH&hellip;</div>';
   try {
-    const result = await fetchJSON(`/api/devices/${macDash}/nad-probe`, { method: "POST" });
+    const result = await fetchJSONWithTimeout(`/api/devices/${macDash}/nad-probe`, { method: "POST" }, 120000);
     if (container) container.innerHTML = _renderNadResult(result);
   } catch (err) {
     if (container) container.innerHTML = `<div class="ddp-empty ddp-error-val">Probe failed: ${escapeHtml(err.message)}</div>`;

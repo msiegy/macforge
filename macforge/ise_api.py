@@ -470,64 +470,166 @@ def apply_anc_policy(config: ISEConfig, mac: str, policy_name: str) -> dict:
         return {"status": "error", "message": str(exc)}
 
 
-def send_coa(config: ISEConfig, mac: str, action: str) -> dict:
-    """Send Change of Authorization (CoA) via ISE ERS session MAC endpoints.
+def _get_session_by_mac(config: ISEConfig, mac_hyphen: str) -> dict:
+    """Look up an active ISE session using the targeted MnT MAC endpoint.
 
-    action: 'reauth' | 'disconnect' | 'port_bounce'
-    Uses PUT /ers/config/session/{MAC}/reAuth or /disconnect.
-    No RADIUS session ID needed — MAC is used directly.
-    Returns {"status": "ok", "message": "..."} or error dict.
+    GET /admin/API/mnt/Session/MACAddress/{MAC}
+
+    This is a direct single-session lookup — far more reliable than parsing
+    the full ActiveList.  Returns dict with ise_name, nas_ip, endpoint_ip on
+    success, or {"status": "error", "message": ...} on failure.
+
+    ISE XML field names searched (tries both hyphen and underscore variants
+    since ISE versions are inconsistent):
+      ise-name / ise_name
+      nas-ip-address / nas_ip_address
+      framed-ip-address / framed_ip_address / calling-station-ip
     """
-    if not config.hostname or not config.username:
-        return {"status": "error", "message": "ISE not configured"}
+    url = f"https://{config.hostname}/admin/API/mnt/Session/MACAddress/{mac_hyphen}"
+    logger.info("Session lookup → GET %s", url)
 
-    # ISE session endpoints use uppercase colon-separated MAC
-    mac_fmt = mac.replace("-", ":").upper()
-
-    action_map = {
-        "reauth": "reAuth",
-        "disconnect": "disconnect",
-        "port_bounce": "disconnect",  # closest ISE session action
-    }
-    url_suffix = action_map.get(action.lower())
-    if not url_suffix:
-        return {
-            "status": "error",
-            "message": f"Unknown CoA action '{action}'. Valid: reauth, disconnect, port_bounce",
-        }
-
-    url = f"https://{config.hostname}/ers/config/session/{urllib.parse.quote(mac_fmt)}/{url_suffix}"
     ctx = _make_ssl_context(config.verify_tls)
     req = urllib.request.Request(
         url,
-        data=b"",           # PUT with empty body
-        method="PUT",
         headers={
             "Authorization": _auth_header(config.username, config.password),
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Content-Length": "0",
+            "Accept": "application/xml",
         },
     )
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
             body = resp.read()
-            try:
-                result = json.loads(body) if body else {}
-            except Exception:
-                result = {}
-            return {"status": "ok", "message": f"CoA {url_suffix} sent to {mac_fmt}", "response": result}
+
+        logger.debug("Session XML for %s:\n%s", mac_hyphen, body.decode(errors="replace")[:2000])
+        root = ET.fromstring(body)
+
+        def _find(*tags: str) -> str:
+            """Search the whole tree for any of the given tag names; return first hit."""
+            for tag in tags:
+                for el in root.iter(tag):
+                    val = (el.text or "").strip()
+                    if val:
+                        return val
+            return ""
+
+        # ISE 3.x MnT returns underscore-named tags; PSN node is <acs_server>
+        ise_name    = _find("acs_server", "ise_name", "ise-name", "server")
+        nas_ip      = _find("nas_ip_address", "nas-ip-address", "device_ip_address",
+                            "network-device-ip-address")
+        endpoint_ip = _find("framed_ip_address", "framed-ip-address",
+                            "calling_station_ip", "calling-station-ip")
+
+        if not ise_name:
+            logger.warning("Session XML has no ISE node name for %s — dumping tags: %s",
+                           mac_hyphen, [el.tag for el in root.iter()])
+            return {"status": "error",
+                    "message": "ISE session found but PSN node name is missing in response"}
+
+        logger.info("Session: mac=%s  psn=%s  nad=%s  ep=%s",
+                    mac_hyphen, ise_name, nas_ip, endpoint_ip)
+        return {
+            "status":      "ok",
+            "ise_name":    ise_name,
+            "nas_ip":      nas_ip,
+            "endpoint_ip": endpoint_ip,
+        }
+
     except urllib.error.HTTPError as exc:
-        body = ""
+        err_body = ""
         try:
-            body = exc.read().decode()[:500]
+            err_body = exc.read().decode()[:300]
         except Exception:
             pass
-        return {"status": "error", "message": f"HTTP {exc.code}: {exc.reason}", "detail": body}
+        if exc.code == 404:
+            logger.warning("Session lookup 404 for %s — not in MnT (device may not be authenticated)", mac_hyphen)
+            return {"status": "error",
+                    "message": f"No active ISE session for {mac_hyphen} — device may not be authenticated yet"}
+        logger.error("Session lookup HTTP %s for %s: %s", exc.code, mac_hyphen, err_body)
+        return {"status": "error", "message": f"HTTP {exc.code}: {exc.reason}", "detail": err_body}
     except urllib.error.URLError as exc:
+        logger.error("Session lookup connection failed: %s", exc.reason)
         return {"status": "error", "message": f"Connection failed: {exc.reason}"}
     except Exception as exc:
+        logger.exception("Session lookup unexpected error for %s", mac_hyphen)
+        return {"status": "error", "message": str(exc)}
+
+
+def send_coa(config: ISEConfig, mac: str, action: str) -> dict:
+    """Send CoA via ISE MnT REST API.
+
+    Resolves the PSN name, NAS IP, and endpoint IP from the MnT session
+    lookup (Session/MACAddress), then calls the appropriate MnT CoA endpoint:
+
+      Reauth     GET /admin/API/mnt/CoA/Reauth/{psn}/{mac}/0
+      Disconnect GET /admin/API/mnt/CoA/Disconnect/{psn}/{mac}/0/{nad_ip}/{ep_ip}
+      Port Bounce GET /admin/API/mnt/CoA/Disconnect/{psn}/{mac}/1/{nad_ip}/{ep_ip}
+
+    DISCONNECT_TYPE: 0=Disconnect, 1=Port Bounce, 2=Shutdown
+    REAUTH_TYPE:     0=Default, 1=Last, 2=Rerun
+    """
+    if not config.hostname or not config.username:
+        return {"status": "error", "message": "ISE not configured"}
+
+    action_lower = action.lower()
+    if action_lower not in ("reauth", "disconnect", "port_bounce"):
+        return {"status": "error",
+                "message": f"Unknown action '{action}'. Valid: reauth, disconnect, port_bounce"}
+
+    # MnT URLs use uppercase hyphen-separated MAC: XX-XX-XX-XX-XX-XX
+    clean = mac.replace(":", "").replace("-", "").upper()
+    mac_hyphen = "-".join(clean[i:i+2] for i in range(0, 12, 2))
+
+    # Resolve session info from ISE MnT
+    session = _get_session_by_mac(config, mac_hyphen)
+    if session.get("status") == "error":
+        return session
+
+    psn     = urllib.parse.quote(session["ise_name"],    safe="")
+    mac_q   = urllib.parse.quote(mac_hyphen,             safe="")
+    nad_q   = urllib.parse.quote(session["nas_ip"],      safe="")
+    ep_q    = urllib.parse.quote(session["endpoint_ip"], safe="")
+    base    = f"https://{config.hostname}/admin/API/mnt/CoA"
+
+    if action_lower == "reauth":
+        url   = f"{base}/Reauth/{psn}/{mac_q}/0"
+        label = "Re-auth"
+    elif action_lower == "disconnect":
+        url   = f"{base}/Disconnect/{psn}/{mac_q}/0/{nad_q}/{ep_q}"
+        label = "Disconnect"
+    else:  # port_bounce
+        url   = f"{base}/Disconnect/{psn}/{mac_q}/1/{nad_q}/{ep_q}"
+        label = "Port Bounce"
+
+    logger.info("CoA %s → GET %s", action, url)
+
+    ctx = _make_ssl_context(config.verify_tls)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": _auth_header(config.username, config.password),
+            "Accept": "application/xml",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            resp.read()
+            logger.info("CoA %s success for %s", action, mac_hyphen)
+            return {"status": "ok", "message": f"{label} sent for {mac_hyphen}"}
+    except urllib.error.HTTPError as exc:
+        err_body = ""
+        try:
+            err_body = exc.read().decode()[:500]
+        except Exception:
+            pass
+        logger.error("CoA %s failed for %s: HTTP %s — %s", action, mac_hyphen, exc.code, err_body)
+        return {"status": "error", "message": f"HTTP {exc.code}: {exc.reason}", "detail": err_body}
+    except urllib.error.URLError as exc:
+        logger.error("CoA %s connection failed: %s", action, exc.reason)
+        return {"status": "error", "message": f"Connection failed: {exc.reason}"}
+    except Exception as exc:
+        logger.exception("CoA %s unexpected error for %s", action, mac_hyphen)
         return {"status": "error", "message": str(exc)}
 
 

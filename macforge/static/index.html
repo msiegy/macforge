@@ -394,9 +394,9 @@
         </div>
         <div class="ddp-header-right">
           <div class="ddp-coa-group" id="ddpCoaGroup" style="display:none">
-            <button class="btn btn-sm btn-coa-reauth"   onclick="sendCoA('reauth')"      title="Force re-authentication without disconnecting">&#8635; Re-auth</button>
-            <button class="btn btn-sm btn-coa-bounce"   onclick="sendCoA('port_bounce')" title="Bounce the switch port (full re-auth cycle)">&#9654; Port Bounce</button>
-            <button class="btn btn-sm btn-coa-disconnect" onclick="sendCoA('disconnect')" title="Terminate the ISE session">&#9744; Terminate</button>
+            <button class="btn btn-sm btn-coa-reauth"     onclick="sendCoA('reauth')"      title="Re-authenticate via ISE MnT CoA (PSN/session resolved automatically)">&#8635; Re-auth</button>
+            <button class="btn btn-sm btn-coa-bounce"     onclick="sendCoA('port_bounce')" title="Bounce switch port via ISE MnT CoA">&#9654; Port Bounce</button>
+            <button class="btn btn-sm btn-coa-disconnect" onclick="sendCoA('disconnect')"  title="Disconnect session via ISE MnT CoA">&#9632; Disconnect</button>
           </div>
           <button class="btn btn-sm btn-connect-all" id="ddpConnectBtn" onclick="ddpConnectDevice()">Connect</button>
           <button class="btn btn-sm btn-disconnect-all" id="ddpDisconnectBtn" onclick="ddpDisconnectDevice()">Disconnect</button>
