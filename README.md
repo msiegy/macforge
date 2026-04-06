@@ -4,7 +4,8 @@
 
 MACforge is a Docker-based tool that emulates multiple network devices by spoofing MAC addresses, generating realistic DHCP fingerprints, and performing 802.1X (dot1x) authentication. Purpose-built for testing and demonstrating RADIUS MAB/dot1x authentication and device profiling with systems like Cisco ISE.
 
-<img src="docs/images/macforge-homeui.png" width="800" alt="MACforge web UI">
+<!--<img src="docs/images/macforge-homeui.png" width="800" alt="MACforge web UI">-->
+<img src="docs/images/mforgetour.gif" width="800" alt="MACforge demo">
 
 ## What It Does
 
