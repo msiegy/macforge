@@ -151,16 +151,28 @@ def export_sessions_csv() -> str:
 def _make_pyrad_client(cfg: RADIUSNADConfig, acct: bool = False):
     """Create a pyrad UDP client targeting ISE."""
     try:
+        import pyrad
         from pyrad import client as pclient, dictionary as pdict
     except ImportError as exc:
         raise RuntimeError("pyrad is not installed — rebuild the Docker image") from exc
+
+    # pyrad ships a standard RADIUS dictionary inside its package directory.
+    # Dictionary() with no args creates an EMPTY dict — attributes wouldn't resolve.
+    pkg_dir = Path(pyrad.__file__).parent
+    dict_file = pkg_dir / "dictionary"
+    if dict_file.exists():
+        radius_dict = pdict.Dictionary(str(dict_file))
+    else:
+        # Fallback: try loading without a file (attributes will need integer keys)
+        logger.warning("pyrad dictionary file not found at %s — attribute names may not resolve", dict_file)
+        radius_dict = pdict.Dictionary()
 
     c = pclient.Client(
         server=cfg.ise_radius_ip,
         authport=cfg.radius_port,
         acctport=cfg.acct_port,
         secret=cfg.shared_secret.encode(),
-        dict=pdict.Dictionary(),
+        dict=radius_dict,
     )
     c.timeout = 10
     c.retries = 1
