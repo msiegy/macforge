@@ -51,6 +51,9 @@
       <span class="tab-icon">&#9776;</span> Packet Log
       <span class="tab-count" id="tabLogCount">0</span>
     </button>
+    <button class="tab" data-tab="radius">
+      <span class="tab-icon">&#128268;</span> NAD Emulator
+    </button>
   </nav>
 
   <main>
@@ -377,6 +380,225 @@
         <div class="log-entries" id="logEntries">
           <div class="empty-state">No packets sent yet</div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── NAD Emulator Tab ──────────────────────────────── -->
+    <div class="tab-pane" id="pane-radius">
+      <div class="cert-page">
+
+        <div class="cert-page-header">
+          <div>
+            <h1 class="cert-page-title">NAD Emulator</h1>
+            <p class="cert-page-subtitle">Send RADIUS auth and accounting directly to ISE — no physical switch required.</p>
+          </div>
+        </div>
+
+        <!-- ── RADIUS Configuration ──────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9881;</span>
+            <h2 class="cert-section-title">RADIUS NAD Configuration</h2>
+          </div>
+          <div class="cert-actions-card">
+            <div class="ise-panel-grid">
+              <div class="form-group">
+                <label class="form-label cert-field-label">ISE PSN IP / Hostname</label>
+                <input type="text" class="form-input" id="radiusIseIp" placeholder="10.x.x.x or psn.lab.local">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">Shared Secret</label>
+                <div class="password-wrapper">
+                  <input type="password" class="form-input" id="radiusSecret" placeholder="RADIUS shared secret">
+                  <button type="button" class="password-toggle" onclick="togglePasswordVis('radiusSecret')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">NAS-IP-Address <span class="form-hint-inline">(must match ISE Network Device)</span></label>
+                <input type="text" class="form-input" id="radiusNasIp" placeholder="10.x.x.x">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">NAS-Identifier</label>
+                <input type="text" class="form-input" id="radiusNasId" placeholder="macforge-nad">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">Auth Port</label>
+                <input type="number" class="form-input" id="radiusPort" value="1812" min="1" max="65535">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">Acct Port</label>
+                <input type="number" class="form-input" id="radiusAcctPort" value="1813" min="1" max="65535">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">CoA Port</label>
+                <input type="number" class="form-input" id="radiusCoaPort" value="3799" min="1" max="65535">
+              </div>
+              <div class="form-group form-toggle">
+                <label class="form-label cert-field-label">Enable CoA Listener</label>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="radiusCoaEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="form-hint">Binds UDP port to receive ISE-initiated CoA / Disconnect</span>
+              </div>
+            </div>
+            <div class="ise-panel-actions">
+              <button class="btn btn-save" onclick="saveRadiusConfig()">Save Settings</button>
+              <button class="btn btn-section-connect" onclick="testRadiusConnection()">Test RADIUS</button>
+              <button class="btn btn-accent" onclick="registerNADinISE()" title="Requires ISE REST to be configured in Certificates tab">Register NAD in ISE</button>
+              <button class="btn btn-remove" onclick="removeNADfromISE()" title="Remove the auto-registered Network Device from ISE">Remove NAD</button>
+            </div>
+            <div id="radiusConfigStatus" class="ise-inline-status"></div>
+          </div>
+        </div>
+
+        <!-- ── Session Builder ───────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9654;</span>
+            <h2 class="cert-section-title">Session Builder</h2>
+          </div>
+          <div class="cert-actions-card">
+            <div class="radius-builder-grid">
+              <div class="form-group">
+                <label class="form-label cert-field-label">Auth Type</label>
+                <div class="radius-auth-type-row">
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="mab" checked onchange="onRadiusAuthTypeChange()"> MAB
+                  </label>
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="pap" onchange="onRadiusAuthTypeChange()"> PAP
+                  </label>
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="peap" onchange="onRadiusAuthTypeChange()"> EAP-PEAP-MSCHAPv2
+                  </label>
+                </div>
+              </div>
+              <div class="form-group" id="radiusMacRow">
+                <label class="form-label cert-field-label">MAC Address <span class="form-hint-inline">(blank = random)</span></label>
+                <input type="text" class="form-input" id="radiusMac" placeholder="aa:bb:cc:dd:ee:ff (leave blank for random)">
+              </div>
+              <div class="form-group" id="radiusUsernameRow" style="display:none">
+                <label class="form-label cert-field-label">Username</label>
+                <input type="text" class="form-input" id="radiusUsername" placeholder="user@domain.local">
+              </div>
+              <div class="form-group" id="radiusPasswordRow" style="display:none">
+                <label class="form-label cert-field-label">Password</label>
+                <div class="password-wrapper">
+                  <input type="password" class="form-input" id="radiusPassword" placeholder="Password">
+                  <button type="button" class="password-toggle" onclick="togglePasswordVis('radiusPassword')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bulk controls -->
+            <details class="stepca-details" id="radiusBulkDetails">
+              <summary class="stepca-summary">
+                <span class="stepca-summary-title">Bulk Session Generation <span class="stepca-badge">Optional</span></span>
+                <span class="stepca-summary-desc">Generate multiple sessions concurrently against ISE.</span>
+              </summary>
+              <div class="stepca-body">
+                <div class="radius-builder-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Session Count</label>
+                    <input type="number" class="form-input" id="radiusCount" value="1" min="1" max="10000">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Concurrency</label>
+                    <input type="number" class="form-input" id="radiusConcurrency" value="5" min="1" max="200">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Delay between sessions (ms)</label>
+                    <input type="number" class="form-input" id="radiusDelay" value="0" min="0">
+                  </div>
+                  <div class="form-group" id="radiusUsernameTemplateRow">
+                    <label class="form-label cert-field-label">Username Template <span class="form-hint-inline">{n} = index</span></label>
+                    <input type="text" class="form-input" id="radiusUsernameTemplate" value="user{n}@lab.local">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Base MAC <span class="form-hint-inline">(blank = random per session)</span></label>
+                    <input type="text" class="form-input" id="radiusBaseMac" placeholder="AA:BB:CC:00:00:00">
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <div class="cert-action-row" style="margin-top:16px">
+              <button class="btn btn-accent" id="radiusRunBtn" onclick="runRadiusSessions()">Run</button>
+              <button class="btn btn-remove" id="radiusCancelBtn" onclick="cancelRadiusBulk()" style="display:none">Cancel</button>
+            </div>
+
+            <!-- Bulk progress -->
+            <div id="radiusBulkProgress" style="display:none; margin-top:12px">
+              <div class="radius-progress-bar-wrap">
+                <div class="radius-progress-bar" id="radiusProgressBar" style="width:0%"></div>
+              </div>
+              <div class="radius-progress-stats" id="radiusProgressStats">Starting…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Session Results ───────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#128200;</span>
+            <h2 class="cert-section-title">Session Results</h2>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" onclick="loadRadiusSessions()">Refresh</button>
+              <button class="btn btn-sm btn-accent" onclick="exportRadiusCsv()" title="Download as CSV">&#8681; CSV</button>
+              <button class="btn btn-sm btn-remove" onclick="clearRadiusSessions()">Clear</button>
+            </div>
+          </div>
+          <div id="radiusSessionStats" class="radius-summary-bar"></div>
+          <div class="cert-table-card">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="radiusSessionTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>MAC / User</th>
+                    <th>Result</th>
+                    <th>Acct-Session-ID</th>
+                    <th>Duration</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="radiusSessionBody">
+                  <tr><td colspan="7" class="cert-table-empty">No sessions yet — run one above.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── CoA Events ────────────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9889;</span>
+            <h2 class="cert-section-title">CoA Events <span class="stepca-badge" id="coaListenerBadge" style="display:none">Listening</span></h2>
+          </div>
+          <div class="cert-table-card">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="coaEventTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Source IP</th>
+                    <th>MAC</th>
+                    <th>Session ID</th>
+                    <th>Response</th>
+                  </tr>
+                </thead>
+                <tbody id="coaEventBody">
+                  <tr><td colspan="6" class="cert-table-empty">No CoA events received yet. Enable the CoA listener above.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 

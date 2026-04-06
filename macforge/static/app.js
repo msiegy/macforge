@@ -123,6 +123,10 @@ function switchTab(tabName) {
     loadISEConfig();
     loadEnrollmentCaps();
   }
+  if (tabName === "radius") {
+    loadRadiusConfig();
+    loadRadiusSessions();
+  }
 }
 
 document.querySelectorAll(".tab").forEach((t) => {
@@ -4050,6 +4054,322 @@ function _renderNadResult(r) {
   return html + `<div class="nad-sections">${sections.join("")}</div>`;
 }
 
+
+/* ─── NAD Emulator (RADIUS) ──────────────────────────────────────── */
+
+let _radiusCoaEventSource = null;
+let _radiusBulkProgressSource = null;
+let _radiusRunning = false;
+
+async function loadRadiusConfig() {
+  try {
+    const d = await fetchJSON("/api/radius/config");
+    document.getElementById("radiusIseIp").value = d.ise_radius_ip || "";
+    document.getElementById("radiusSecret").value = d.shared_secret || "";
+    document.getElementById("radiusNasIp").value = d.nas_ip || "";
+    document.getElementById("radiusNasId").value = d.nas_identifier || "macforge-nad";
+    document.getElementById("radiusPort").value = d.radius_port || 1812;
+    document.getElementById("radiusAcctPort").value = d.acct_port || 1813;
+    document.getElementById("radiusCoaPort").value = d.coa_port || 3799;
+    document.getElementById("radiusCoaEnabled").checked = !!d.coa_enabled;
+
+    const badge = document.getElementById("coaListenerBadge");
+    badge.style.display = d.coa_enabled ? "" : "none";
+
+    if (!_radiusCoaEventSource && d.coa_enabled) {
+      _startCoaEventStream();
+    }
+  } catch (e) {
+    console.warn("loadRadiusConfig:", e);
+  }
+}
+
+async function saveRadiusConfig() {
+  const payload = {
+    ise_radius_ip: document.getElementById("radiusIseIp").value.trim(),
+    shared_secret: document.getElementById("radiusSecret").value,
+    nas_ip: document.getElementById("radiusNasIp").value.trim(),
+    nas_identifier: document.getElementById("radiusNasId").value.trim() || "macforge-nad",
+    radius_port: parseInt(document.getElementById("radiusPort").value) || 1812,
+    acct_port: parseInt(document.getElementById("radiusAcctPort").value) || 1813,
+    coa_port: parseInt(document.getElementById("radiusCoaPort").value) || 3799,
+    coa_enabled: document.getElementById("radiusCoaEnabled").checked,
+  };
+  const el = document.getElementById("radiusConfigStatus");
+  try {
+    await fetchJSON("/api/radius/config", { method: "PUT", body: JSON.stringify(payload) });
+    el.textContent = "✓ Settings saved";
+    el.className = "ise-inline-status ise-status-ok";
+    document.getElementById("coaListenerBadge").style.display = payload.coa_enabled ? "" : "none";
+    if (payload.coa_enabled) _startCoaEventStream(); else _stopCoaEventStream();
+  } catch (e) {
+    el.textContent = "✗ " + e.message;
+    el.className = "ise-inline-status ise-status-error";
+  }
+  setTimeout(() => { el.textContent = ""; el.className = "ise-inline-status"; }, 4000);
+}
+
+async function testRadiusConnection() {
+  const el = document.getElementById("radiusConfigStatus");
+  el.textContent = "Testing…";
+  el.className = "ise-inline-status";
+  try {
+    const d = await fetchJSONWithTimeout("/api/radius/test", { method: "POST" }, 15000);
+    el.textContent = (d.status === "ok" ? "✓ " : "✗ ") + d.message;
+    el.className = "ise-inline-status " + (d.status === "ok" ? "ise-status-ok" : "ise-status-error");
+  } catch (e) {
+    el.textContent = "✗ " + e.message;
+    el.className = "ise-inline-status ise-status-error";
+  }
+  setTimeout(() => { el.textContent = ""; el.className = "ise-inline-status"; }, 8000);
+}
+
+async function registerNADinISE() {
+  const el = document.getElementById("radiusConfigStatus");
+  el.textContent = "Registering NAD in ISE…";
+  el.className = "ise-inline-status";
+  try {
+    const d = await fetchJSONWithTimeout("/api/radius/ise/register-nad", { method: "POST" }, 15000);
+    el.textContent = (d.status === "ok" ? "✓ " : "✗ ") + d.message;
+    el.className = "ise-inline-status " + (d.status === "ok" ? "ise-status-ok" : "ise-status-error");
+  } catch (e) {
+    el.textContent = "✗ " + e.message;
+    el.className = "ise-inline-status ise-status-error";
+  }
+  setTimeout(() => { el.textContent = ""; el.className = "ise-inline-status"; }, 8000);
+}
+
+async function removeNADfromISE() {
+  if (!confirm("Remove the auto-registered Network Device from ISE?")) return;
+  const el = document.getElementById("radiusConfigStatus");
+  el.textContent = "Removing NAD from ISE…";
+  el.className = "ise-inline-status";
+  try {
+    const d = await fetchJSONWithTimeout("/api/radius/ise/register-nad", { method: "DELETE" }, 15000);
+    el.textContent = (d.status === "ok" ? "✓ " : "✗ ") + d.message;
+    el.className = "ise-inline-status " + (d.status === "ok" ? "ise-status-ok" : "ise-status-error");
+  } catch (e) {
+    el.textContent = "✗ " + e.message;
+    el.className = "ise-inline-status ise-status-error";
+  }
+  setTimeout(() => { el.textContent = ""; el.className = "ise-inline-status"; }, 8000);
+}
+
+function onRadiusAuthTypeChange() {
+  const type = document.querySelector("input[name='radiusAuthType']:checked")?.value || "mab";
+  document.getElementById("radiusMacRow").style.display      = (type === "mab") ? "" : "none";
+  document.getElementById("radiusUsernameRow").style.display = (type !== "mab") ? "" : "none";
+  document.getElementById("radiusPasswordRow").style.display = (type !== "mab") ? "" : "none";
+}
+
+async function runRadiusSessions() {
+  const type      = document.querySelector("input[name='radiusAuthType']:checked")?.value || "mab";
+  const count     = parseInt(document.getElementById("radiusCount").value) || 1;
+  const conc      = parseInt(document.getElementById("radiusConcurrency").value) || 5;
+  const delay     = parseInt(document.getElementById("radiusDelay").value) || 0;
+  const baseMac   = document.getElementById("radiusBaseMac").value.trim();
+  const uTemplate = document.getElementById("radiusUsernameTemplate").value.trim();
+  const mac       = document.getElementById("radiusMac").value.trim();
+  const username  = document.getElementById("radiusUsername").value.trim();
+  const password  = document.getElementById("radiusPassword").value;
+
+  const isBulk = count > 1;
+
+  if (isBulk) {
+    // Bulk via /api/radius/bulk/start
+    const payload = {
+      auth_type: type, count, concurrency: conc, delay_ms: delay,
+      base_mac: baseMac, username_template: uTemplate, password,
+    };
+    try {
+      await fetchJSON("/api/radius/bulk/start", { method: "POST", body: JSON.stringify(payload) });
+      _startBulkProgressStream(count);
+    } catch (e) {
+      showToast("Bulk run error: " + e.message, "error");
+    }
+  } else {
+    // Single session
+    const payload = { auth_type: type, mac, username, password, nas_port: 1 };
+    const btn = document.getElementById("radiusRunBtn");
+    btn.disabled = true;
+    btn.textContent = "Running…";
+    try {
+      const result = await fetchJSONWithTimeout(
+        "/api/radius/run-session",
+        { method: "POST", body: JSON.stringify(payload) },
+        30000,
+      );
+      _prependSessionRow(result);
+      _updateRadiusStats();
+    } catch (e) {
+      showToast("Session error: " + e.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Run";
+    }
+  }
+}
+
+async function cancelRadiusBulk() {
+  try {
+    await fetchJSON("/api/radius/bulk/cancel", { method: "POST" });
+  } catch (e) {
+    console.warn("cancelRadiusBulk:", e);
+  }
+}
+
+function _startBulkProgressStream(total) {
+  if (_radiusBulkProgressSource) {
+    _radiusBulkProgressSource.close();
+  }
+  const btn    = document.getElementById("radiusRunBtn");
+  const cancel = document.getElementById("radiusCancelBtn");
+  const prog   = document.getElementById("radiusBulkProgress");
+  btn.style.display    = "none";
+  cancel.style.display = "";
+  prog.style.display   = "";
+  _radiusRunning = true;
+
+  _radiusBulkProgressSource = new EventSource("/api/radius/bulk/progress");
+  _radiusBulkProgressSource.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    const done = d.accepted + d.rejected + d.errors;
+    const pct  = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    document.getElementById("radiusProgressBar").style.width = pct + "%";
+    document.getElementById("radiusProgressStats").innerHTML =
+      `<span>Total: <b>${done}/${total}</b></span>` +
+      `<span class="radius-accept">Accept: <b>${d.accepted}</b></span>` +
+      `<span class="radius-reject">Reject: <b>${d.rejected}</b></span>` +
+      `<span class="radius-error">Error: <b>${d.errors}</b></span>` +
+      `<span>Rate: <b>${d.rate}/s</b></span>`;
+    if (!d.running) {
+      _radiusBulkProgressSource.close();
+      _radiusBulkProgressSource = null;
+      _radiusRunning = false;
+      btn.style.display    = "";
+      cancel.style.display = "none";
+      // Reload results
+      loadRadiusSessions();
+    }
+  };
+  _radiusBulkProgressSource.onerror = () => {
+    if (_radiusBulkProgressSource) _radiusBulkProgressSource.close();
+    _radiusBulkProgressSource = null;
+    _radiusRunning = false;
+    btn.style.display    = "";
+    cancel.style.display = "none";
+  };
+}
+
+async function loadRadiusSessions() {
+  try {
+    const sessions = await fetchJSON("/api/radius/sessions?limit=200");
+    const tbody = document.getElementById("radiusSessionBody");
+    if (!sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="cert-table-empty">No sessions yet — run one above.</td></tr>';
+      _updateRadiusStats(sessions);
+      return;
+    }
+    tbody.innerHTML = sessions.map(_renderSessionRow).join("");
+    _updateRadiusStats(sessions);
+  } catch (e) {
+    console.warn("loadRadiusSessions:", e);
+  }
+}
+
+function _prependSessionRow(result) {
+  const tbody = document.getElementById("radiusSessionBody");
+  const emptyRow = tbody.querySelector(".cert-table-empty");
+  if (emptyRow) tbody.innerHTML = "";
+  const row = document.createElement("tr");
+  row.innerHTML = _renderSessionRow(result);
+  tbody.insertAdjacentHTML("afterbegin", _renderSessionRow(result));
+}
+
+function _renderSessionRow(s) {
+  const ts = s.timestamp ? new Date(s.timestamp * 1000).toLocaleTimeString() : "—";
+  const badge = `<span class="result-badge result-badge-${s.result}">${s.result}</span>`;
+  const id    = s.mac || s.username || "—";
+  return `<tr>
+    <td>${ts}</td>
+    <td><b>${(s.auth_type || "").toUpperCase()}</b></td>
+    <td style="font-family:monospace;font-size:12px">${escapeHtml(id)}</td>
+    <td>${badge}</td>
+    <td style="font-family:monospace;font-size:11px">${escapeHtml(s.acct_session_id || "—")}</td>
+    <td>${s.duration_ms != null ? s.duration_ms + " ms" : "—"}</td>
+    <td style="font-size:11px;color:var(--text-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(s.detail || "")}">${escapeHtml(s.detail || "")}</td>
+  </tr>`;
+}
+
+function _updateRadiusStats(sessions) {
+  if (!sessions) return;
+  const accepted = sessions.filter(s => s.result === "accept").length;
+  const rejected = sessions.filter(s => s.result === "reject").length;
+  const errors   = sessions.filter(s => s.result === "error" || s.result === "timeout").length;
+  document.getElementById("radiusSessionStats").innerHTML =
+    `<div class="radius-stat"><span class="radius-stat-value">${sessions.length}</span><span class="radius-stat-label">Total</span></div>` +
+    `<div class="radius-stat"><span class="radius-stat-value radius-accept">${accepted}</span><span class="radius-stat-label">Accept</span></div>` +
+    `<div class="radius-stat"><span class="radius-stat-value radius-reject">${rejected}</span><span class="radius-stat-label">Reject</span></div>` +
+    `<div class="radius-stat"><span class="radius-stat-value radius-error">${errors}</span><span class="radius-stat-label">Error</span></div>`;
+}
+
+async function clearRadiusSessions() {
+  if (!confirm("Clear all session results?")) return;
+  try {
+    await fetchJSON("/api/radius/sessions", { method: "DELETE" });
+    document.getElementById("radiusSessionBody").innerHTML =
+      '<tr><td colspan="7" class="cert-table-empty">No sessions yet — run one above.</td></tr>';
+    document.getElementById("radiusSessionStats").innerHTML = "";
+  } catch (e) {
+    showToast("Clear failed: " + e.message, "error");
+  }
+}
+
+function exportRadiusCsv() {
+  window.location.href = "/api/radius/sessions/export";
+}
+
+function _startCoaEventStream() {
+  if (_radiusCoaEventSource) return;
+  _radiusCoaEventSource = new EventSource("/api/radius/coa-events");
+  _radiusCoaEventSource.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.ping) return;
+    _prependCoaEventRow(d);
+  };
+  _radiusCoaEventSource.onerror = () => {
+    if (_radiusCoaEventSource) {
+      _radiusCoaEventSource.close();
+      _radiusCoaEventSource = null;
+    }
+  };
+}
+
+function _stopCoaEventStream() {
+  if (_radiusCoaEventSource) {
+    _radiusCoaEventSource.close();
+    _radiusCoaEventSource = null;
+  }
+}
+
+function _prependCoaEventRow(ev) {
+  const tbody = document.getElementById("coaEventBody");
+  const emptyRow = tbody.querySelector(".cert-table-empty");
+  if (emptyRow) tbody.innerHTML = "";
+  const ts = ev.timestamp ? new Date(ev.timestamp * 1000).toLocaleTimeString() : "—";
+  const row = `<tr>
+    <td>${ts}</td>
+    <td><b>${escapeHtml(ev.event_type || "—")}</b></td>
+    <td style="font-family:monospace;font-size:12px">${escapeHtml(ev.source_ip || "—")}</td>
+    <td style="font-family:monospace;font-size:12px">${escapeHtml(ev.mac || "—")}</td>
+    <td style="font-family:monospace;font-size:11px">${escapeHtml(ev.session_id || "—")}</td>
+    <td><span class="result-badge result-badge-accept">${escapeHtml(ev.response || "—")}</span></td>
+  </tr>`;
+  tbody.insertAdjacentHTML("afterbegin", row);
+  // Cap CoA event table to 100 rows
+  const rows = tbody.querySelectorAll("tr");
+  if (rows.length > 100) rows[rows.length - 1].remove();
+}
 
 /* ─── Init ────────────────────────────────────────────────────────── */
 

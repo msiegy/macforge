@@ -7,3 +7,4 @@ python-multipart>=0.0.9
 cryptography>=44.0.0
 asyncssh>=2.14.0
 netmiko>=4.4.0
+pyrad>=2.4

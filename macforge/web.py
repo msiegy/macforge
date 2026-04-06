@@ -13,6 +13,26 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from macforge.radius_nad import (
+    RADIUSNADConfig,
+    RADIUSSessionResult,
+    cancel_bulk,
+    clear_session_log,
+    export_sessions_csv,
+    get_bulk_state,
+    get_coa_events,
+    get_session_log,
+    load_radius_nad_config,
+    register_nad_in_ise,
+    remove_nad_from_ise,
+    restart_coa_listener,
+    run_bulk_sessions,
+    run_single_session,
+    save_radius_nad_config,
+    start_coa_listener,
+    test_radius_connection_sync,
+    _coa_event_queue,
+)
 from macforge.certgen import (
     generate_client_cert,
     generate_csr,
@@ -70,6 +90,10 @@ _orchestrator: Orchestrator | None = None
 async def _startup_checks() -> None:
     """Run pre-flight diagnostics on server start."""
     await check_wpa_supplicant_version()
+    # Start CoA listener if enabled in saved config
+    cfg = load_radius_nad_config()
+    if cfg.coa_enabled and cfg.ise_radius_ip and cfg.shared_secret:
+        asyncio.create_task(start_coa_listener(cfg))
 
 
 def set_orchestrator(orch: Orchestrator) -> None:
@@ -1239,6 +1263,216 @@ async def set_data_interface(payload: SetDataInterfacePayload):
 @app.get("/api/vendor-ouis")
 async def vendor_ouis():
     return get_oui_table()
+
+
+# ─── RADIUS NAD Emulator ─────────────────────────────────────────────
+
+
+class RADIUSNADConfigPayload(BaseModel):
+    ise_radius_ip: str = ""
+    radius_port: int = 1812
+    acct_port: int = 1813
+    shared_secret: str = ""
+    nas_ip: str = ""
+    nas_identifier: str = "macforge-nad"
+    coa_port: int = 3799
+    coa_enabled: bool = False
+
+
+@app.get("/api/radius/config")
+async def get_radius_config():
+    cfg = load_radius_nad_config()
+    return {
+        "ise_radius_ip": cfg.ise_radius_ip,
+        "radius_port": cfg.radius_port,
+        "acct_port": cfg.acct_port,
+        "shared_secret": "••••••••" if cfg.shared_secret else "",
+        "nas_ip": cfg.nas_ip,
+        "nas_identifier": cfg.nas_identifier,
+        "coa_port": cfg.coa_port,
+        "coa_enabled": cfg.coa_enabled,
+        "configured": bool(cfg.ise_radius_ip and cfg.shared_secret and cfg.nas_ip),
+    }
+
+
+@app.put("/api/radius/config")
+async def update_radius_config(payload: RADIUSNADConfigPayload):
+    cfg = RADIUSNADConfig(**payload.model_dump())
+    save_radius_nad_config(cfg)
+    # Restart CoA listener with new settings
+    restart_coa_listener(cfg)
+    return {"status": "saved"}
+
+
+@app.post("/api/radius/test")
+async def test_radius_connection():
+    cfg = load_radius_nad_config()
+    if not cfg.ise_radius_ip or not cfg.shared_secret:
+        return {"status": "error", "message": "RADIUS NAD not configured — set ISE IP, shared secret, and NAS-IP first"}
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, test_radius_connection_sync, cfg)
+
+
+class RunSessionPayload(BaseModel):
+    auth_type: str = "mab"
+    mac: str = ""
+    username: str = ""
+    password: str = ""
+    nas_port: int = 1
+
+
+@app.post("/api/radius/run-session")
+async def api_run_session(payload: RunSessionPayload):
+    cfg = load_radius_nad_config()
+    if not cfg.ise_radius_ip or not cfg.shared_secret:
+        raise HTTPException(status_code=400, detail="RADIUS NAD not configured")
+    if payload.auth_type not in ("mab", "pap", "peap"):
+        raise HTTPException(status_code=400, detail="auth_type must be: mab, pap, peap")
+
+    result = await run_single_session(
+        cfg=cfg,
+        auth_type=payload.auth_type,   # type: ignore[arg-type]
+        mac=payload.mac,
+        username=payload.username,
+        password=payload.password,
+        nas_port=payload.nas_port,
+    )
+    return result.model_dump()
+
+
+@app.get("/api/radius/sessions")
+async def get_radius_sessions(limit: int = 200):
+    sessions = get_session_log()
+    return [s.model_dump() for s in sessions[:limit]]
+
+
+@app.delete("/api/radius/sessions")
+async def delete_radius_sessions():
+    clear_session_log()
+    return {"status": "cleared"}
+
+
+@app.get("/api/radius/sessions/export")
+async def export_radius_sessions():
+    csv_data = export_sessions_csv()
+    return StreamingResponse(
+        iter([csv_data]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="radius_sessions.csv"'},
+    )
+
+
+class BulkRunPayload(BaseModel):
+    auth_type: str = "mab"
+    count: int = 10
+    concurrency: int = 5
+    delay_ms: int = 0
+    base_mac: str = ""
+    username_template: str = "user{n}@lab.local"
+    password: str = ""
+
+
+@app.post("/api/radius/bulk/start")
+async def start_bulk_run(payload: BulkRunPayload):
+    cfg = load_radius_nad_config()
+    if not cfg.ise_radius_ip or not cfg.shared_secret:
+        raise HTTPException(status_code=400, detail="RADIUS NAD not configured")
+    bulk = get_bulk_state()
+    if bulk["running"]:
+        raise HTTPException(status_code=409, detail="A bulk run is already in progress")
+    if payload.count < 1 or payload.count > 10000:
+        raise HTTPException(status_code=400, detail="count must be 1–10000")
+    if payload.concurrency < 1 or payload.concurrency > 200:
+        raise HTTPException(status_code=400, detail="concurrency must be 1–200")
+
+    asyncio.create_task(run_bulk_sessions(
+        cfg=cfg,
+        auth_type=payload.auth_type,    # type: ignore[arg-type]
+        count=payload.count,
+        concurrency=payload.concurrency,
+        delay_ms=payload.delay_ms,
+        base_mac=payload.base_mac,
+        username_template=payload.username_template,
+        password=payload.password,
+    ))
+    return {"status": "started", "total": payload.count}
+
+
+@app.get("/api/radius/bulk/status")
+async def get_bulk_status():
+    return get_bulk_state()
+
+
+@app.post("/api/radius/bulk/cancel")
+async def cancel_bulk_run():
+    cancel_bulk()
+    return {"status": "cancelling"}
+
+
+@app.get("/api/radius/coa-events")
+async def stream_coa_events():
+    """Server-Sent Events stream for live CoA events from ISE."""
+    async def _event_generator():
+        # Send any buffered events first
+        for event in reversed(list(get_coa_events())[:20]):
+            yield f"data: {event.model_dump_json()}\n\n"
+
+        while True:
+            try:
+                event = await asyncio.wait_for(_coa_event_queue.get(), timeout=30)
+                yield f"data: {event.model_dump_json()}\n\n"
+            except asyncio.TimeoutError:
+                yield "data: {\"ping\":true}\n\n"
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/radius/bulk/progress")
+async def stream_bulk_progress():
+    """SSE stream for bulk run progress updates."""
+    async def _progress_generator():
+        while True:
+            state = get_bulk_state()
+            import json as _json
+            yield f"data: {_json.dumps(state)}\n\n"
+            if not state["running"]:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        _progress_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/radius/ise/register-nad")
+async def api_register_nad():
+    from macforge.ise_api import load_ise_config as _load_ise
+    ise_cfg = _load_ise()
+    radius_cfg = load_radius_nad_config()
+    if not ise_cfg.hostname or not ise_cfg.username:
+        raise HTTPException(status_code=400, detail="ISE REST not configured — add hostname in the Certificates tab")
+    if not radius_cfg.nas_ip or not radius_cfg.shared_secret:
+        raise HTTPException(status_code=400, detail="RADIUS NAD not configured — set NAS-IP and shared secret first")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, register_nad_in_ise, ise_cfg, radius_cfg)
+
+
+@app.delete("/api/radius/ise/register-nad")
+async def api_remove_nad():
+    from macforge.ise_api import load_ise_config as _load_ise
+    ise_cfg = _load_ise()
+    radius_cfg = load_radius_nad_config()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, remove_nad_from_ise, ise_cfg, radius_cfg)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
