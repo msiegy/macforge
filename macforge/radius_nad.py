@@ -56,16 +56,23 @@ ATTRIBUTE Called-Station-Id 30 string
 ATTRIBUTE Calling-Station-Id 31 string
 ATTRIBUTE NAS-Identifier 32 string
 ATTRIBUTE Acct-Status-Type 40 integer
+ATTRIBUTE Acct-Input-Octets 42 integer
+ATTRIBUTE Acct-Output-Octets 43 integer
 ATTRIBUTE Acct-Session-Id 44 string
 ATTRIBUTE Acct-Session-Time 46 integer
+ATTRIBUTE Acct-Terminate-Cause 49 integer
 ATTRIBUTE NAS-Port-Type 61 integer
+ATTRIBUTE Connect-Info 77 string
 ATTRIBUTE EAP-Message 79 octets
 ATTRIBUTE Message-Authenticator 80 octets
+ATTRIBUTE NAS-Port-Id 87 string
 VALUE Service-Type Login 1
+VALUE Service-Type Framed 2
 VALUE Service-Type Call-Check 10
 VALUE Acct-Status-Type Start 1
 VALUE Acct-Status-Type Stop 2
 VALUE NAS-Port-Type Ethernet 15
+VALUE Acct-Terminate-Cause User-Request 1
 """
 
 # ─── Config Model ────────────────────────────────────────────────────
@@ -258,7 +265,13 @@ def _local_ip() -> str:
 
 def _run_mab_session_sync(cfg: RADIUSNADConfig, mac: str,
                            nas_port: int) -> RADIUSSessionResult:
-    """Send a MAB Access-Request to ISE (synchronous)."""
+    """Send a MAB Access-Request to ISE (synchronous).
+
+    MAB flow on a real switch:
+      1. Detect link-up + no EAP response within 30s → send Access-Request
+         (Service-Type=Call-Check, User-Name=MAC, User-Password=MAC)
+      2. On Accept → send Acct-Start, hold session, send Acct-Stop
+    """
     from pyrad import packet as ppacket
 
     mac_clean = mac.lower().replace(":", "").replace("-", "")
@@ -280,20 +293,24 @@ def _run_mab_session_sync(cfg: RADIUSNADConfig, mac: str,
         req = c.CreateAuthPacket(code=ppacket.AccessRequest)
         req["User-Name"] = mac_clean
         req["User-Password"] = req.PwCrypt(mac_clean)
-        req["Service-Type"] = 10    # Call-Check (MAB indicator for ISE)
+        req["Service-Type"] = 10    # Call-Check — the MAB signal ISE looks for
         _fill_nas_attrs(req, cfg, nas_port, mac_colons, cfg.nas_identifier)
 
         reply = c.SendPacket(req)
 
         if reply.code == ppacket.AccessAccept:
             result.result = "accept"
+            # Simulated session time + bytes make accounting realistic in ISE reports
+            sess_secs = random.randint(60, 600)
+            in_oct, out_oct = _simulated_bytes("mab")
             _send_accounting_sync(cfg, "Start", mac_colons, mac_clean,
-                                  acct_session_id, nas_port)
+                                  acct_session_id, nas_port, auth_type="mab")
             _send_accounting_sync(cfg, "Stop", mac_colons, mac_clean,
-                                  acct_session_id, nas_port)
+                                  acct_session_id, nas_port, auth_type="mab",
+                                  session_time_s=sess_secs,
+                                  input_octets=in_oct, output_octets=out_oct)
         elif reply.code == ppacket.AccessReject:
             result.result = "reject"
-            # Extract Reply-Message if present
             msgs = reply.get("Reply-Message", [])
             if msgs:
                 result.detail = msgs[0] if isinstance(msgs[0], str) else msgs[0].decode(errors="replace")
@@ -314,11 +331,20 @@ def _run_mab_session_sync(cfg: RADIUSNADConfig, mac: str,
 def _run_pap_session_sync(cfg: RADIUSNADConfig, username: str,
                            password: str, nas_port: int,
                            mac: str = "") -> RADIUSSessionResult:
-    """Send a PAP Access-Request to ISE (synchronous)."""
+    """Send a PAP Access-Request to ISE (synchronous).
+
+    PAP flow (e.g. VPN gateway, admin console, or non-EAP wired NAD):
+      1. User presents credentials → NAS sends Access-Request with PAP password
+      2. On Accept → Acct-Start, session, Acct-Stop
+    """
     from pyrad import packet as ppacket
 
-    mac_colons = mac or "00:00:00:00:00:00"
+    # Generate a locally-administered MAC if caller didn't supply one.
+    # Using a real MAC avoids the all-zeros endpoint being mis-profiled by ISE.
+    mac_colons = mac if mac else _random_mac()
     acct_session_id = str(uuid.uuid4())[:8].upper()
+    # Simulate a host IP in a private range for Framed-IP-Address in accounting
+    framed_ip = f"10.{random.randint(1,254)}.{random.randint(0,254)}.{random.randint(1,254)}"
 
     result = RADIUSSessionResult(
         session_id=str(uuid.uuid4()),
@@ -335,17 +361,23 @@ def _run_pap_session_sync(cfg: RADIUSNADConfig, username: str,
         req = c.CreateAuthPacket(code=ppacket.AccessRequest)
         req["User-Name"] = username
         req["User-Password"] = req.PwCrypt(password)
-        req["Service-Type"] = 1   # Login
+        req["Service-Type"] = 2   # Framed — typical for network access auth
         _fill_nas_attrs(req, cfg, nas_port, mac_colons, cfg.nas_identifier)
 
         reply = c.SendPacket(req)
 
         if reply.code == ppacket.AccessAccept:
             result.result = "accept"
+            sess_secs = random.randint(300, 3600)
+            in_oct, out_oct = _simulated_bytes("pap")
             _send_accounting_sync(cfg, "Start", mac_colons, username,
-                                  acct_session_id, nas_port)
+                                  acct_session_id, nas_port, auth_type="pap",
+                                  framed_ip=framed_ip)
             _send_accounting_sync(cfg, "Stop", mac_colons, username,
-                                  acct_session_id, nas_port)
+                                  acct_session_id, nas_port, auth_type="pap",
+                                  session_time_s=sess_secs,
+                                  input_octets=in_oct, output_octets=out_oct,
+                                  framed_ip=framed_ip)
         elif reply.code == ppacket.AccessReject:
             result.result = "reject"
             msgs = reply.get("Reply-Message", [])
@@ -368,8 +400,16 @@ def _run_pap_session_sync(cfg: RADIUSNADConfig, username: str,
 async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
                                    password: str, nas_port: int,
                                    mac: str = "") -> RADIUSSessionResult:
-    """Run EAP-PEAP-MSCHAPv2 via eapol_test subprocess."""
-    mac_colons = mac or "00:00:00:00:00:00"
+    """Run EAP-PEAP-MSCHAPv2 via eapol_test subprocess.
+
+    PEAP-MSCHAPv2 flow on a real wired switch:
+      1. Link-up → switch sends EAP-Request/Identity
+      2. Client NAK → switch negotiates PEAP with ISE
+      3. TLS tunnel established → MSCHAPv2 inner auth
+      4. Access-Accept with MPPE keys → Acct-Start, session, Acct-Stop
+    """
+    # Generate a locally-administered MAC if caller didn't supply one.
+    mac_colons = mac if mac else _random_mac()
     acct_session_id = str(uuid.uuid4())[:8].upper()
     anonymous = f"anonymous@{username.split('@')[1]}" if "@" in username else "anonymous"
 
@@ -413,8 +453,7 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
             tmp_conf = f.name
 
         nas_ip = cfg.nas_ip or _local_ip()
-        # NAS-IP-Address is an ipaddr type — must be encoded as 4-byte hex in
-        # eapol_test -N flags (format 'x'); string format 's' sends raw ASCII.
+        # NAS-IP-Address is an ipaddr type — must be 4-byte hex for eapol_test -N.
         import binascii as _ba
         nas_ip_hex = _ba.hexlify(socket.inet_aton(nas_ip)).decode()
         cmd = [
@@ -423,12 +462,16 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
             "-a", cfg.ise_radius_ip,
             "-p", str(cfg.radius_port),
             "-s", cfg.shared_secret,
-            "-N", f"4:x:{nas_ip_hex}",       # NAS-IP-Address (ipaddr, hex encoded)
+            "-N", f"4:x:{nas_ip_hex}",          # NAS-IP-Address (ipaddr, hex)
             "-N", f"32:s:{cfg.nas_identifier}",  # NAS-Identifier
-            "-N", f"31:s:{mac_colons}",      # Calling-Station-Id
-            "-N", f"5:d:{nas_port}",         # NAS-Port
-            "-N", "61:d:15",                 # NAS-Port-Type = Ethernet
-            "-r", "0",                       # no retries on failure — prevents loop
+            "-N", f"31:s:{mac_colons}",          # Calling-Station-Id
+            "-N", f"5:d:{nas_port}",             # NAS-Port
+            "-N", "61:d:15",                     # NAS-Port-Type = Ethernet
+            # eapol_test hard-codes "CONNECT 11Mbps 802.11b" (WiFi) as Connect-Info.
+            # Override with a wired Gigabit Ethernet string so ISE profiling and logs
+            # don't show a spurious 802.11 connection speed for a simulated wired session.
+            "-N", "77:s:CONNECT 1Gbps 802.3",   # Connect-Info = wired GigE
+            "-r", "0",                           # no retries on failure
         ]
 
         proc = await asyncio.create_subprocess_exec(
@@ -454,15 +497,26 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
         if "SUCCESS" in output:
             result.result = "accept"
             loop = asyncio.get_event_loop()
+            framed_ip = (
+                f"10.{random.randint(1,254)}.{random.randint(0,254)}"
+                f".{random.randint(1,254)}"
+            )
+            sess_secs = random.randint(300, 3600)
+            in_oct, out_oct = _simulated_bytes("peap")
             await loop.run_in_executor(
                 None,
-                _send_accounting_sync,
-                cfg, "Start", mac_colons, username, acct_session_id, nas_port,
+                lambda: _send_accounting_sync(
+                    cfg, "Start", mac_colons, username, acct_session_id, nas_port,
+                    auth_type="peap", framed_ip=framed_ip,
+                ),
             )
             await loop.run_in_executor(
                 None,
-                _send_accounting_sync,
-                cfg, "Stop", mac_colons, username, acct_session_id, nas_port,
+                lambda: _send_accounting_sync(
+                    cfg, "Stop", mac_colons, username, acct_session_id, nas_port,
+                    auth_type="peap", session_time_s=sess_secs,
+                    input_octets=in_oct, output_octets=out_oct, framed_ip=framed_ip,
+                ),
             )
         elif "FAILURE" in output:
             result.result = "reject"
@@ -501,10 +555,38 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
 
 # ─── RADIUS Accounting ────────────────────────────────────────────────
 
-def _send_accounting_sync(cfg: RADIUSNADConfig, status: str,
-                           calling_mac: str, username: str,
-                           acct_session_id: str, nas_port: int) -> None:
-    """Send Accounting-Request (Start or Stop) to ISE."""
+def _simulated_bytes(auth_type: str) -> tuple[int, int]:
+    """Return (input_octets, output_octets) representative of a short session.
+
+    MAB  → typically just DHCP + a few ARP probes (a few KB).
+    PAP/PEAP → simulated user data exchange (~100 KB – 2 MB).
+    Values are randomised so aggregate reports look natural.
+    """
+    if auth_type == "mab":
+        return (random.randint(512, 8192), random.randint(1024, 16384))
+    return (random.randint(65536, 2097152), random.randint(131072, 4194304))
+
+
+def _send_accounting_sync(
+    cfg: RADIUSNADConfig,
+    status: str,
+    calling_mac: str,
+    username: str,
+    acct_session_id: str,
+    nas_port: int,
+    *,
+    auth_type: str = "mab",
+    session_time_s: int = 0,
+    input_octets: int = 0,
+    output_octets: int = 0,
+    framed_ip: str = "",
+) -> None:
+    """Send Accounting-Request (Start or Stop) to ISE.
+
+    Stop packets include Acct-Session-Time, Acct-Input/Output-Octets,
+    Acct-Terminate-Cause (User-Request), and an optional Framed-IP-Address
+    to mirror the state a real NAS would report.
+    """
     from pyrad import packet as ppacket
     try:
         c = _make_pyrad_client(cfg, acct=True)
@@ -517,9 +599,14 @@ def _send_accounting_sync(cfg: RADIUSNADConfig, status: str,
         req["NAS-IP-Address"] = cfg.nas_ip or _local_ip()
         req["NAS-Identifier"] = cfg.nas_identifier
         req["NAS-Port"] = nas_port
-        req["NAS-Port-Type"] = 15
+        req["NAS-Port-Type"] = 15   # Ethernet
+        if framed_ip:
+            req["Framed-IP-Address"] = framed_ip
         if status == "Stop":
-            req["Acct-Session-Time"] = 5
+            req["Acct-Session-Time"] = session_time_s
+            req["Acct-Input-Octets"] = input_octets
+            req["Acct-Output-Octets"] = output_octets
+            req["Acct-Terminate-Cause"] = 1  # User-Request
         c.SendPacket(req)
         logger.debug("Accounting %s sent for %s", status, acct_session_id)
     except Exception:
@@ -642,21 +729,28 @@ def _increment_mac(base_mac: str, n: int) -> str:
 # ─── RADIUS test ─────────────────────────────────────────────────────
 
 def test_radius_connection_sync(cfg: RADIUSNADConfig) -> dict:
-    """Send a minimal Access-Request to check reachability. Uses an unlikely MAC."""
+    """Send a minimal Access-Request to verify RADIUS reachability.
+
+    Uses a clearly synthetic MAC/username (DE:AD:C0:DE:00:01 / deadc0de0001)
+    and a NAS-Port-Id of 'macforge-test-probe' so the entry is immediately
+    recognisable in ISE live logs and reports.
+    """
     from pyrad import packet as ppacket
-    test_mac = "de:ad:be:ef:00:01"
+    test_mac = "DE:AD:C0:DE:00:01"
+    test_user = "deadc0de0001"
     try:
         c = _make_pyrad_client(cfg)
         c.timeout = 5
         req = c.CreateAuthPacket(code=ppacket.AccessRequest)
-        req["User-Name"] = "deadbeef0001"
-        req["User-Password"] = req.PwCrypt("deadbeef0001")
-        req["Service-Type"] = 10
+        req["User-Name"] = test_user
+        req["User-Password"] = req.PwCrypt(test_user)
+        req["Service-Type"] = 10   # Call-Check → MAB probe
         req["NAS-IP-Address"] = cfg.nas_ip or _local_ip()
         req["NAS-Identifier"] = cfg.nas_identifier
         req["NAS-Port"] = 0
         req["NAS-Port-Type"] = 15
         req["Calling-Station-Id"] = test_mac
+        req["NAS-Port-Id"] = "macforge-test-probe"  # visible label in ISE logs
 
         reply = c.SendPacket(req)
         code_name = {
