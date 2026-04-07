@@ -42,6 +42,32 @@ DATA_DIR = Path(os.environ.get("MACFORGE_DATA_DIR", "/app/data"))
 RADIUS_NAD_CONFIG_PATH = DATA_DIR / "radius_nad_config.json"
 EAPOL_TEST_BIN = shutil.which("eapol_test") or "/usr/local/bin/eapol_test"
 
+# Minimal RADIUS dictionary embedded inline so we never depend on pyrad's
+# bundled dictionary file location (which varies by install / pyrad version).
+_RADIUS_DICT = """\
+ATTRIBUTE User-Name 1 string
+ATTRIBUTE User-Password 2 string
+ATTRIBUTE NAS-IP-Address 4 ipaddr
+ATTRIBUTE NAS-Port 5 integer
+ATTRIBUTE Service-Type 6 integer
+ATTRIBUTE Framed-IP-Address 8 ipaddr
+ATTRIBUTE Reply-Message 18 string
+ATTRIBUTE Called-Station-Id 30 string
+ATTRIBUTE Calling-Station-Id 31 string
+ATTRIBUTE NAS-Identifier 32 string
+ATTRIBUTE Acct-Status-Type 40 integer
+ATTRIBUTE Acct-Session-Id 44 string
+ATTRIBUTE Acct-Session-Time 46 integer
+ATTRIBUTE NAS-Port-Type 61 integer
+ATTRIBUTE EAP-Message 79 octets
+ATTRIBUTE Message-Authenticator 80 octets
+VALUE Service-Type Login 1
+VALUE Service-Type Call-Check 10
+VALUE Acct-Status-Type Start 1
+VALUE Acct-Status-Type Stop 2
+VALUE NAS-Port-Type Ethernet 15
+"""
+
 # ─── Config Model ────────────────────────────────────────────────────
 
 
@@ -148,31 +174,58 @@ def export_sessions_csv() -> str:
 
 # ─── pyrad helpers ───────────────────────────────────────────────────
 
+def _build_radius_dict():
+    """Build a pyrad Dictionary from our embedded attribute definitions.
+
+    pyrad's DictFile parser only accepts file paths (not file-like objects),
+    so we write the embedded dictionary to a temp file and load from there.
+    The file is kept alive for the process lifetime via the module-level ref.
+    """
+    from pyrad import dictionary as pdict
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".dict", prefix="/tmp/mf_radius_", delete=False
+    )
+    tmp.write(_RADIUS_DICT)
+    tmp.flush()
+    tmp.close()
+    try:
+        d = pdict.Dictionary(tmp.name)
+    finally:
+        try:
+            Path(tmp.name).unlink()
+        except Exception:
+            pass
+    return d
+
+
+# Module-level singleton — built once, shared across all pyrad calls.
+_PYRAD_DICT = None
+
+
+def _get_pyrad_dict():
+    global _PYRAD_DICT
+    if _PYRAD_DICT is None:
+        try:
+            _PYRAD_DICT = _build_radius_dict()
+        except Exception as exc:
+            logger.error("Failed to build RADIUS dictionary: %s", exc)
+            raise
+    return _PYRAD_DICT
+
+
 def _make_pyrad_client(cfg: RADIUSNADConfig, acct: bool = False):
     """Create a pyrad UDP client targeting ISE."""
     try:
-        import pyrad
-        from pyrad import client as pclient, dictionary as pdict
+        from pyrad import client as pclient
     except ImportError as exc:
         raise RuntimeError("pyrad is not installed — rebuild the Docker image") from exc
-
-    # pyrad ships a standard RADIUS dictionary inside its package directory.
-    # Dictionary() with no args creates an EMPTY dict — attributes wouldn't resolve.
-    pkg_dir = Path(pyrad.__file__).parent
-    dict_file = pkg_dir / "dictionary"
-    if dict_file.exists():
-        radius_dict = pdict.Dictionary(str(dict_file))
-    else:
-        # Fallback: try loading without a file (attributes will need integer keys)
-        logger.warning("pyrad dictionary file not found at %s — attribute names may not resolve", dict_file)
-        radius_dict = pdict.Dictionary()
 
     c = pclient.Client(
         server=cfg.ise_radius_ip,
         authport=cfg.radius_port,
         acctport=cfg.acct_port,
         secret=cfg.shared_secret.encode(),
-        dict=radius_dict,
+        dict=_get_pyrad_dict(),
     )
     c.timeout = 10
     c.retries = 1
@@ -360,18 +413,22 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
             tmp_conf = f.name
 
         nas_ip = cfg.nas_ip or _local_ip()
+        # NAS-IP-Address is an ipaddr type — must be encoded as 4-byte hex in
+        # eapol_test -N flags (format 'x'); string format 's' sends raw ASCII.
+        import binascii as _ba
+        nas_ip_hex = _ba.hexlify(socket.inet_aton(nas_ip)).decode()
         cmd = [
             EAPOL_TEST_BIN,
             "-c", tmp_conf,
             "-a", cfg.ise_radius_ip,
             "-p", str(cfg.radius_port),
             "-s", cfg.shared_secret,
-            "-N", f"4:s:{nas_ip}",          # NAS-IP-Address
+            "-N", f"4:x:{nas_ip_hex}",       # NAS-IP-Address (ipaddr, hex encoded)
             "-N", f"32:s:{cfg.nas_identifier}",  # NAS-Identifier
-            "-N", f"31:s:{mac_colons}",     # Calling-Station-Id
-            "-N", f"5:d:{nas_port}",        # NAS-Port
-            "-N", "61:d:15",                # NAS-Port-Type = Ethernet
-            "-t", "15",                     # timeout seconds
+            "-N", f"31:s:{mac_colons}",      # Calling-Station-Id
+            "-N", f"5:d:{nas_port}",         # NAS-Port
+            "-N", "61:d:15",                 # NAS-Port-Type = Ethernet
+            "-r", "0",                       # no retries on failure — prevents loop
         ]
 
         proc = await asyncio.create_subprocess_exec(
@@ -392,6 +449,7 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
             return result
 
         output = (stdout + stderr).decode(errors="replace")
+        logger.debug("eapol_test output:\n%s", output[-2000:])
 
         if "SUCCESS" in output:
             result.result = "accept"
@@ -408,14 +466,27 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
             )
         elif "FAILURE" in output:
             result.result = "reject"
-            # Try to extract a reason from the log
+            # Extract the most informative failure reason from the log.
+            # Preference order: EAP failure text → last EAP state line.
+            detail = ""
             for line in output.splitlines():
-                if "EAP:" in line or "error" in line.lower():
-                    result.detail = line.strip()[:200]
+                low = line.lower()
+                if "failure" in low and "eap" in low and "state" not in low:
+                    detail = line.strip()
                     break
+                if any(kw in low for kw in ("wrong password", "access-reject", "failed")):
+                    detail = line.strip()
+                    break
+            result.detail = detail[:200] if detail else "Access-Reject from ISE"
         else:
+            # Neither SUCCESS nor FAILURE — usually a connectivity/config error.
+            # Grab the last meaningful output line.
+            meaningful = [
+                l.strip() for l in output.splitlines()
+                if l.strip() and not l.startswith("OpenSSL")
+            ]
             result.result = "error"
-            result.detail = output[-400:].strip()
+            result.detail = (meaningful[-1] if meaningful else output[-200:])[:200]
 
     except Exception as exc:
         result.result = "error"

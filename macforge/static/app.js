@@ -4124,6 +4124,18 @@ async function testRadiusConnection() {
   setTimeout(() => { el.textContent = ""; el.className = "ise-inline-status"; }, 8000);
 }
 
+async function detectNasIp() {
+  try {
+    const data = await fetchJSON("/api/radius/local-ip");
+    if (data.ip) {
+      document.getElementById("radiusNasIp").value = data.ip;
+      showToast(`Detected MACforge host IP: ${data.ip}`, "success");
+    }
+  } catch (e) {
+    showToast("Could not detect local IP: " + e.message, "error");
+  }
+}
+
 async function registerNADinISE() {
   const el = document.getElementById("radiusConfigStatus");
   el.textContent = "Registering NAD in ISE…";
@@ -4200,7 +4212,8 @@ async function runRadiusSessions() {
         30000,
       );
       _prependSessionRow(result);
-      _updateRadiusStats();
+      // Reload full list so counters pick up the new row too
+      loadRadiusSessions();
     } catch (e) {
       showToast("Session error: " + e.message, "error");
     } finally {
@@ -4281,19 +4294,23 @@ function _prependSessionRow(result) {
   const tbody = document.getElementById("radiusSessionBody");
   const emptyRow = tbody.querySelector(".cert-table-empty");
   if (emptyRow) tbody.innerHTML = "";
-  const row = document.createElement("tr");
-  row.innerHTML = _renderSessionRow(result);
   tbody.insertAdjacentHTML("afterbegin", _renderSessionRow(result));
 }
 
 function _renderSessionRow(s) {
-  const ts = s.timestamp ? new Date(s.timestamp * 1000).toLocaleTimeString() : "—";
+  const ts    = s.timestamp ? new Date(s.timestamp * 1000).toLocaleTimeString() : "—";
   const badge = `<span class="result-badge result-badge-${s.result}">${s.result}</span>`;
-  const id    = s.mac || s.username || "—";
+  // Show MAC for MAB; username for PAP/PEAP; both if both present
+  let identity = "";
+  if (s.mac && s.username && s.auth_type !== "mab") {
+    identity = `<span style="color:var(--text-muted)">${escapeHtml(s.mac)}</span><br>${escapeHtml(s.username)}`;
+  } else {
+    identity = escapeHtml(s.mac || s.username || "—");
+  }
   return `<tr>
     <td>${ts}</td>
     <td><b>${(s.auth_type || "").toUpperCase()}</b></td>
-    <td style="font-family:monospace;font-size:12px">${escapeHtml(id)}</td>
+    <td style="font-family:monospace;font-size:12px">${identity}</td>
     <td>${badge}</td>
     <td style="font-family:monospace;font-size:11px">${escapeHtml(s.acct_session_id || "—")}</td>
     <td>${s.duration_ms != null ? s.duration_ms + " ms" : "—"}</td>

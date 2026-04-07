@@ -414,8 +414,13 @@
                 </div>
               </div>
               <div class="form-group">
-                <label class="form-label cert-field-label">NAS-IP-Address <span class="form-hint-inline">(must match ISE Network Device)</span></label>
-                <input type="text" class="form-input" id="radiusNasIp" placeholder="10.x.x.x">
+                <label class="form-label cert-field-label">NAS-IP-Address
+                  <span class="form-hint-inline">— ISE matches the Network Device by the <b>UDP source IP</b> of the RADIUS packet, which is MACforge's host IP. Set this to MACforge's IP and register the NAD with the same IP.</span>
+                </label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" class="form-input" id="radiusNasIp" placeholder="e.g. 192.168.1.204" style="flex:1">
+                  <button type="button" class="btn-sm" onclick="detectNasIp()" title="Auto-detect MACforge host IP">Detect</button>
+                </div>
               </div>
               <div class="form-group">
                 <label class="form-label cert-field-label">NAS-Identifier</label>

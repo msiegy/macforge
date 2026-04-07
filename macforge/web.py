@@ -1304,6 +1304,13 @@ async def update_radius_config(payload: RADIUSNADConfigPayload):
     return {"status": "saved"}
 
 
+@app.get("/api/radius/local-ip")
+async def get_radius_local_ip():
+    """Return the host IP that ISE will see as the UDP source of RADIUS packets."""
+    from macforge.radius_nad import _local_ip
+    return {"ip": _local_ip()}
+
+
 @app.post("/api/radius/test")
 async def test_radius_connection():
     cfg = load_radius_nad_config()
