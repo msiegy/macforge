@@ -126,6 +126,9 @@ function switchTab(tabName) {
   if (tabName === "radius") {
     loadRadiusConfig();
     loadRadiusSessions();
+    loadRadiusProfiles();
+    loadRadiusCerts();
+    loadLiveSessions();
   }
 }
 
@@ -4124,6 +4127,266 @@ async function testRadiusConnection() {
   setTimeout(() => { el.textContent = ""; el.className = "ise-inline-status"; }, 8000);
 }
 
+// ── Profile-aware MAB ────────────────────────────────────────────────
+
+let _radiusProfiles = [];
+
+async function loadRadiusProfiles() {
+  try {
+    _radiusProfiles = await fetchJSON("/api/radius/profiles");
+    const sel = document.getElementById("radiusProfileSelect");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— none (use MAC below) —</option>';
+    for (const p of _radiusProfiles) {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      opt.textContent = `${p.name} — ${p.oui} (${p.device_type})`;
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    console.warn("loadRadiusProfiles:", e);
+  }
+}
+
+function onRadiusProfileSelect() {
+  const name     = document.getElementById("radiusProfileSelect").value;
+  const macInput = document.getElementById("radiusMac");
+  const hint     = document.getElementById("radiusProfileHint");
+  if (!name) {
+    hint.textContent    = "";
+    macInput.placeholder = "aa:bb:cc:dd:ee:ff";
+    macInput.value       = "";
+    return;
+  }
+  const p = _radiusProfiles.find(x => x.name === name);
+  if (!p) return;
+  // Fill the full profile MAC so the user sees the real OUI.
+  // They can click 🔀 to generate a new random device ID within the same OUI,
+  // or clear the field entirely for a fully random MAC.
+  macInput.value = p.mac;
+  hint.textContent = `OUI: ${p.oui} · ${p.device_type} · ${p.os}`
+    + (p.dhcp_vendor_class ? ` · vendor-class: ${p.dhcp_vendor_class}` : "")
+    + `  — click 🔀 to randomize device ID`;
+}
+
+function randomizeMacDeviceId() {
+  const input = document.getElementById("radiusMac");
+  const current = input.value.trim();
+  // Extract OUI from current value; fall back to profile OUI; fall back to DE:AD:BE
+  let oui = "";
+  if (current) {
+    const parts = current.split(":");
+    if (parts.length >= 3) oui = parts.slice(0, 3).join(":").toUpperCase();
+  }
+  if (!oui) {
+    const name = document.getElementById("radiusProfileSelect")?.value || "";
+    const p = _radiusProfiles.find(x => x.name === name);
+    if (p) oui = p.oui;
+  }
+  if (!oui) oui = "DE:AD:BE";
+  const rand = () => Math.floor(Math.random() * 256).toString(16).padStart(2, "0").toUpperCase();
+  input.value = `${oui}:${rand()}:${rand()}:${rand()}`;
+}
+
+// ── EAP-TLS cert management ──────────────────────────────────────────
+
+let _radiusCerts = [];
+
+async function loadRadiusCerts() {
+  try {
+    _radiusCerts = await fetchJSON("/api/radius/certs");
+    const sel   = document.getElementById("radiusCertSelect");
+    const caSel = document.getElementById("radiusCaCertSelect");
+    if (!sel) return;
+
+    sel.innerHTML  = '<option value="">— select a certificate —</option>';
+    caSel.innerHTML = "";
+    const clientCerts = _radiusCerts.filter(c => !c.is_ca && c.has_key);
+    const caCerts     = _radiusCerts.filter(c => c.is_ca);
+
+    for (const c of clientCerts) {
+      const opt = document.createElement("option");
+      opt.value = c.filename;
+      opt.dataset.certFile = c.filename || "";
+      opt.dataset.keyFile  = c.key_file  || "";
+      const exp = c.not_after ? " (expires " + c.not_after.slice(0,10) + ")" : "";
+      opt.textContent = `${c.cn || c.filename}${exp}`;
+      sel.appendChild(opt);
+    }
+
+    for (const c of caCerts) {
+      const opt = document.createElement("option");
+      opt.value = c.filename;
+      opt.textContent = `${c.cn || c.filename} (CA)`;
+      if (c.filename === "lab-ca.pem") opt.selected = true;
+      caSel.appendChild(opt);
+    }
+
+      // ISE CA selector: all PEM files are candidates (could be ISE's CA export)
+    if (!caCerts.length) {
+      // Show all certs as potential ISE CA sources if no dedicated CA found
+      for (const c of _radiusCerts) {
+        const opt = document.createElement("option");
+        opt.value = c.filename;
+        opt.textContent = `${c.cn || c.filename}`;
+        caSel.appendChild(opt);
+      }
+    }
+  } catch (e) {
+    console.warn("loadRadiusCerts:", e);
+  }
+}
+
+function onRadiusValidateServerCertChange() {
+  const checked = document.getElementById("radiusValidateServerCert").checked;
+  document.getElementById("radiusIseCaCertRow").style.display = checked ? "" : "none";
+}
+
+function onRadiusCertSelect() {
+  const sel = document.getElementById("radiusCertSelect");
+  const hint = document.getElementById("radiusCertHint");
+  const name = sel.value;
+  if (!name) { hint.textContent = ""; return; }
+  const c = _radiusCerts.find(x => x.filename === name);
+  if (!c) return;
+  const exp = c.not_after ? " · expires " + c.not_after.slice(0,10) : "";
+  hint.textContent = `Issued by: ${c.issuer_cn || "?"}${exp} · key: ${c.key_file || "?"}`;
+  // Auto-fill identity from CN if blank
+  const id = document.getElementById("radiusUsername");
+  if (!id.value && c.cn) id.value = c.cn;
+}
+
+function showIssueCertPanel() {
+  document.getElementById("issueCertPanel").style.display = "";
+  document.getElementById("issueCertStatus").textContent = "";
+}
+
+async function issueEapTlsCert() {
+  const cn  = document.getElementById("issueCertCn").value.trim();
+  const san = document.getElementById("issueCertSan").value.trim();
+  const ca  = document.getElementById("radiusCaCertSelect")?.value || "lab-ca.pem";
+  const st  = document.getElementById("issueCertStatus");
+  if (!cn) { st.textContent = "CN is required."; return; }
+  st.textContent = "Issuing…";
+  try {
+    const body = { cn, san_emails: san ? [san] : [], ca_cert_file: ca };
+    const r = await fetchJSON("/api/radius/certs/issue", { method: "POST", body: JSON.stringify(body) });
+    st.textContent = `✓ Issued: ${r.cert_file} (expires ${(r.not_after||"").slice(0,10)})`;
+    await loadRadiusCerts();
+    // Auto-select the new cert
+    const sel = document.getElementById("radiusCertSelect");
+    const match = [...sel.options].find(o => o.dataset.certFile === r.cert_file);
+    if (match) { match.selected = true; onRadiusCertSelect(); }
+    document.getElementById("issueCertCn").value = "";
+    document.getElementById("issueCertSan").value = "";
+    setTimeout(() => { document.getElementById("issueCertPanel").style.display = "none"; }, 2000);
+  } catch (e) {
+    st.textContent = "✗ " + e.message;
+  }
+}
+
+// ── Live Sessions ────────────────────────────────────────────────────
+
+let _liveSessionPollTimer = null;
+
+async function loadLiveSessions() {
+  try {
+    const sessions = await fetchJSON("/api/radius/live-sessions");
+    const badge    = document.getElementById("liveSessionsBadge");
+    const empty    = document.getElementById("liveSessionsEmpty");
+    const wrap     = document.getElementById("liveSessionsTableWrap");
+    const tbody    = document.getElementById("liveSessionsBody");
+    const termAll  = document.getElementById("terminateAllBtn");
+
+    if (sessions.length === 0) {
+      badge.style.display = "none";
+      empty.style.display = "";
+      wrap.style.display  = "none";
+      termAll.style.display = "none";
+      _stopLiveSessionPoll();
+      return;
+    }
+
+    badge.textContent   = sessions.length + " active";
+    badge.style.display = "";
+    empty.style.display = "none";
+    wrap.style.display  = "";
+    termAll.style.display = "";
+
+    tbody.innerHTML = sessions.map(s => `
+      <tr>
+        <td><code style="font-size:11px">${s.acct_session_id}</code></td>
+        <td><span class="badge badge-${s.auth_type}">${s.auth_type.toUpperCase()}</span></td>
+        <td style="font-family:monospace;font-size:12px">${s.mac}</td>
+        <td style="font-size:12px">${s.username || "—"}</td>
+        <td style="font-family:monospace;font-size:11px">${s.framed_ip || "—"}</td>
+        <td style="font-size:12px">${_formatUptime(s.uptime_secs)}</td>
+        <td><button class="btn btn-sm btn-remove" onclick="terminateLiveSession('${s.acct_session_id}')">Terminate</button></td>
+      </tr>
+    `).join("");
+
+    // Keep polling while there are live sessions
+    _startLiveSessionPoll();
+  } catch (e) {
+    console.warn("loadLiveSessions:", e);
+  }
+}
+
+function _formatUptime(secs) {
+  if (secs < 60)   return secs + "s";
+  if (secs < 3600) return Math.floor(secs/60) + "m " + (secs%60) + "s";
+  return Math.floor(secs/3600) + "h " + Math.floor((secs%3600)/60) + "m";
+}
+
+function _startLiveSessionPoll() {
+  if (_liveSessionPollTimer) return;
+  _liveSessionPollTimer = setInterval(loadLiveSessions, 5000);
+}
+
+function _stopLiveSessionPoll() {
+  if (_liveSessionPollTimer) {
+    clearInterval(_liveSessionPollTimer);
+    _liveSessionPollTimer = null;
+  }
+}
+
+async function terminateLiveSession(sessionId) {
+  try {
+    await fetchJSON(`/api/radius/live-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    await loadLiveSessions();
+  } catch (e) {
+    showToast("Terminate failed: " + e.message, "error");
+  }
+}
+
+async function terminateAllLiveSessions() {
+  if (!confirm("Send Acct-Stop for all live sessions?")) return;
+  try {
+    const r = await fetchJSON("/api/radius/live-sessions", { method: "DELETE" });
+    showToast(`Terminated ${r.count} session(s)`, "success");
+    await loadLiveSessions();
+  } catch (e) {
+    showToast("Terminate all failed: " + e.message, "error");
+  }
+}
+
+async function clearCoaEvents() {
+  try {
+    await fetchJSON("/api/radius/coa-events", { method: "DELETE" });
+    document.getElementById("coaEventBody").innerHTML =
+      '<tr><td colspan="6" class="cert-table-empty">No CoA events received yet. Enable the CoA listener above.</td></tr>';
+  } catch (e) {
+    showToast("Clear failed: " + e.message, "error");
+  }
+}
+
+function onBulkSourceChange() {
+  const type = document.querySelector("input[name='radiusAuthType']:checked")?.value || "mab";
+  const src = document.getElementById("radiusBulkSource")?.value || "random";
+  const catRow = document.getElementById("radiusDeviceCategoryRow");
+  if (catRow) catRow.style.display = (type === "mab" && src === "category") ? "" : "none";
+}
+
 async function detectNasIp() {
   try {
     const data = await fetchJSON("/api/radius/local-ip");
@@ -4169,9 +4432,20 @@ async function removeNADfromISE() {
 
 function onRadiusAuthTypeChange() {
   const type = document.querySelector("input[name='radiusAuthType']:checked")?.value || "mab";
-  document.getElementById("radiusMacRow").style.display      = (type === "mab") ? "" : "none";
-  document.getElementById("radiusUsernameRow").style.display = (type !== "mab") ? "" : "none";
-  document.getElementById("radiusPasswordRow").style.display = (type !== "mab") ? "" : "none";
+  const isMab    = type === "mab";
+  const isTls    = type === "eap-tls";
+  const isPasswd = !isMab && !isTls;
+
+  document.getElementById("radiusMabProfileRow").style.display  = isMab ? "" : "none";
+  document.getElementById("radiusMacRow").style.display          = (isMab || isTls) ? "" : "none";
+  document.getElementById("radiusUsernameRow").style.display     = !isMab ? "" : "none";
+  document.getElementById("radiusPasswordRow").style.display     = isPasswd ? "" : "none";
+  document.getElementById("radiusTlsFields").style.display       = isTls ? "" : "none";
+  // Bulk source + category rows only make sense for MAB
+  const bulkSrcRow = document.getElementById("radiusBulkSourceRow");
+  if (bulkSrcRow) bulkSrcRow.style.display = isMab ? "" : "none";
+  // Re-evaluate category row visibility (driven by bulk source selector)
+  onBulkSourceChange();
 }
 
 async function runRadiusSessions() {
@@ -4183,25 +4457,58 @@ async function runRadiusSessions() {
   const uTemplate = document.getElementById("radiusUsernameTemplate").value.trim();
   const mac       = document.getElementById("radiusMac").value.trim();
   const username  = document.getElementById("radiusUsername").value.trim();
-  const password  = document.getElementById("radiusPassword").value;
+  const password  = document.getElementById("radiusPassword")?.value || "";
+  const category    = document.getElementById("radiusDeviceCategory")?.value || "";
+  const bulkSource  = document.getElementById("radiusBulkSource")?.value || "random";
+  // For single MAB with a profile selected, carry both the profile name (for DHCP hints)
+  // and OUI (so a blank MAC gets randomised within the profile's OUI).
+  const profileName = document.getElementById("radiusProfileSelect")?.value || "";
+  const profileOui  = profileName
+    ? (_radiusProfiles.find(p => p.name === profileName)?.oui || "")
+    : "";
+  // EAP-TLS
+  const certSel          = document.getElementById("radiusCertSelect");
+  const certFile         = certSel?.selectedOptions[0]?.dataset?.certFile || "";
+  const keyFile          = certSel?.selectedOptions[0]?.dataset?.keyFile  || "";
+  const validateSrvCert  = document.getElementById("radiusValidateServerCert")?.checked || false;
+  const iseCaCert        = validateSrvCert
+    ? (document.getElementById("radiusCaCertSelect")?.value || "")
+    : "";
 
-  const isBulk = count > 1;
+  const isBulk   = count > 1;
+  const lifetime = parseInt(document.getElementById("radiusSessionLifetime")?.value ?? "-1");
 
   if (isBulk) {
     // Bulk via /api/radius/bulk/start
     const payload = {
       auth_type: type, count, concurrency: conc, delay_ms: delay,
-      base_mac: baseMac, username_template: uTemplate, password,
+      base_mac: baseMac,
+      bulk_source: bulkSource,
+      device_category: category,
+      username_template: uTemplate, password,
+      session_lifetime_secs: lifetime,
+      cert_file: certFile, key_file: keyFile,
+      validate_server_cert: validateSrvCert, ise_ca_cert_file: iseCaCert,
     };
+    if (type === "eap-tls" && (!certFile || !keyFile)) {
+      showToast("Select a client certificate before running EAP-TLS bulk sessions.", "error");
+      return;
+    }
     try {
       await fetchJSON("/api/radius/bulk/start", { method: "POST", body: JSON.stringify(payload) });
-      _startBulkProgressStream(count);
+      _startBulkProgressStream(count, lifetime !== -1);
     } catch (e) {
       showToast("Bulk run error: " + e.message, "error");
     }
   } else {
     // Single session
-    const payload = { auth_type: type, mac, username, password, nas_port: 1 };
+    const payload = {
+      auth_type: type, mac, oui_prefix: profileOui, username, password, nas_port: 1,
+      session_lifetime_secs: lifetime,
+      cert_file: certFile, key_file: keyFile,
+      validate_server_cert: validateSrvCert, ise_ca_cert_file: iseCaCert,
+      profile_name: (type === "mab" ? profileName : ""),
+    };
     const btn = document.getElementById("radiusRunBtn");
     btn.disabled = true;
     btn.textContent = "Running…";
@@ -4212,8 +4519,11 @@ async function runRadiusSessions() {
         30000,
       );
       _prependSessionRow(result);
-      // Reload full list so counters pick up the new row too
       loadRadiusSessions();
+      // Refresh live sessions panel if session was accepted and is staying alive
+      if (result.result === "accept" && lifetime !== -1) {
+        loadLiveSessions();
+      }
     } catch (e) {
       showToast("Session error: " + e.message, "error");
     } finally {
@@ -4231,7 +4541,7 @@ async function cancelRadiusBulk() {
   }
 }
 
-function _startBulkProgressStream(total) {
+function _startBulkProgressStream(total, livePoll = false) {
   if (_radiusBulkProgressSource) {
     _radiusBulkProgressSource.close();
   }
@@ -4242,6 +4552,9 @@ function _startBulkProgressStream(total) {
   cancel.style.display = "";
   prog.style.display   = "";
   _radiusRunning = true;
+
+  // Start polling live sessions during the run so the panel updates in real time
+  if (livePoll) _startLiveSessionPoll();
 
   _radiusBulkProgressSource = new EventSource("/api/radius/bulk/progress");
   _radiusBulkProgressSource.onmessage = (e) => {
@@ -4261,8 +4574,10 @@ function _startBulkProgressStream(total) {
       _radiusRunning = false;
       btn.style.display    = "";
       cancel.style.display = "none";
-      // Reload results
       loadRadiusSessions();
+      // Final live-sessions refresh regardless of mode — if sessions became
+      // live during the run, the panel should show them without a manual click.
+      loadLiveSessions();
     }
   };
   _radiusBulkProgressSource.onerror = () => {
@@ -4271,6 +4586,7 @@ function _startBulkProgressStream(total) {
     _radiusRunning = false;
     btn.style.display    = "";
     cancel.style.display = "none";
+    loadLiveSessions();
   };
 }
 

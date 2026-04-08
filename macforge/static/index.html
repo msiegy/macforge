@@ -435,8 +435,10 @@
                 <input type="number" class="form-input" id="radiusAcctPort" value="1813" min="1" max="65535">
               </div>
               <div class="form-group">
-                <label class="form-label cert-field-label">CoA Port</label>
-                <input type="number" class="form-input" id="radiusCoaPort" value="3799" min="1" max="65535">
+                <label class="form-label cert-field-label">CoA Listen Port
+                  <span class="form-hint-inline">— 1700 = Cisco profile (ISE default), 3799 = RFC 5176</span>
+                </label>
+                <input type="number" class="form-input" id="radiusCoaPort" value="1700" min="1" max="65535">
               </div>
               <div class="form-group form-toggle">
                 <label class="form-label cert-field-label">Enable CoA Listener</label>
@@ -477,14 +479,33 @@
                   <label class="radius-radio-label">
                     <input type="radio" name="radiusAuthType" value="peap" onchange="onRadiusAuthTypeChange()"> EAP-PEAP-MSCHAPv2
                   </label>
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="eap-tls" onchange="onRadiusAuthTypeChange()"> EAP-TLS
+                  </label>
                 </div>
               </div>
+
+              <!-- MAB: optional device profile picker -->
+              <div id="radiusMabProfileRow" class="form-group">
+                <label class="form-label cert-field-label">Device Profile <span class="form-hint-inline">— pick a YAML profile to use its real OUI so ISE profiles the endpoint correctly</span></label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <select class="form-input" id="radiusProfileSelect" style="flex:1" onchange="onRadiusProfileSelect()">
+                    <option value="">— none (use MAC below) —</option>
+                  </select>
+                  <button type="button" class="btn-sm" onclick="loadRadiusProfiles()" title="Reload profiles">&#8635;</button>
+                </div>
+                <div id="radiusProfileHint" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+              </div>
+
               <div class="form-group" id="radiusMacRow">
                 <label class="form-label cert-field-label">MAC Address <span class="form-hint-inline">(blank = random)</span></label>
-                <input type="text" class="form-input" id="radiusMac" placeholder="aa:bb:cc:dd:ee:ff (leave blank for random)">
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" class="form-input" id="radiusMac" placeholder="aa:bb:cc:dd:ee:ff" style="flex:1;font-family:monospace">
+                  <button type="button" class="btn-sm" onclick="randomizeMacDeviceId()" title="Keep OUI, randomize device ID (last 3 octets)">&#x1F500;</button>
+                </div>
               </div>
               <div class="form-group" id="radiusUsernameRow" style="display:none">
-                <label class="form-label cert-field-label">Username</label>
+                <label class="form-label cert-field-label">Username / Identity</label>
                 <input type="text" class="form-input" id="radiusUsername" placeholder="user@domain.local">
               </div>
               <div class="form-group" id="radiusPasswordRow" style="display:none">
@@ -492,6 +513,57 @@
                 <div class="password-wrapper">
                   <input type="password" class="form-input" id="radiusPassword" placeholder="Password">
                   <button type="button" class="password-toggle" onclick="togglePasswordVis('radiusPassword')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                </div>
+              </div>
+
+              <!-- EAP-TLS specific fields -->
+              <div id="radiusTlsFields" style="display:none">
+                <div class="form-group">
+                  <label class="form-label cert-field-label">Client Certificate
+                    <span class="form-hint-inline">— must be signed by a CA that ISE trusts</span>
+                  </label>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <select class="form-input" id="radiusCertSelect" style="flex:1" onchange="onRadiusCertSelect()">
+                      <option value="">— select a certificate —</option>
+                    </select>
+                    <button type="button" class="btn-sm" onclick="loadRadiusCerts()" title="Refresh list">&#8635;</button>
+                    <button type="button" class="btn-sm btn-accent" onclick="showIssueCertPanel()">+ Issue</button>
+                  </div>
+                  <div id="radiusCertHint" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label cert-field-label" style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" id="radiusValidateServerCert" onchange="onRadiusValidateServerCertChange()">
+                    Validate ISE server certificate
+                  </label>
+                </div>
+                <div class="form-group" id="radiusIseCaCertRow" style="display:none">
+                  <label class="form-label cert-field-label">ISE Server CA
+                    <span class="form-hint-inline">— CA that signed ISE's TLS cert (Administration › Certificates › Trusted Certificates)</span>
+                  </label>
+                  <select class="form-input" id="radiusCaCertSelect">
+                    <option value="">— select ISE CA cert —</option>
+                  </select>
+                </div>
+
+                <!-- Issue new cert panel (hidden by default) -->
+                <div id="issueCertPanel" style="display:none;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:8px">
+                  <div style="font-weight:600;margin-bottom:10px;font-size:13px">Issue New EAP-TLS Certificate</div>
+                  <div class="radius-builder-grid">
+                    <div class="form-group">
+                      <label class="form-label cert-field-label">Common Name (CN)</label>
+                      <input type="text" class="form-input" id="issueCertCn" placeholder="user@corp.com or host/machine.corp.com">
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label cert-field-label">SAN (email, optional)</label>
+                      <input type="text" class="form-input" id="issueCertSan" placeholder="user@corp.com">
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:8px">
+                    <button class="btn btn-accent btn-sm" onclick="issueEapTlsCert()">Issue Certificate</button>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('issueCertPanel').style.display='none'">Cancel</button>
+                  </div>
+                  <div id="issueCertStatus" style="font-size:12px;margin-top:8px"></div>
                 </div>
               </div>
             </div>
@@ -520,13 +592,51 @@
                     <label class="form-label cert-field-label">Username Template <span class="form-hint-inline">{n} = index</span></label>
                     <input type="text" class="form-input" id="radiusUsernameTemplate" value="user{n}@lab.local">
                   </div>
+                  <div class="form-group" id="radiusBulkSourceRow">
+                    <label class="form-label cert-field-label">MAC / Profile Source</label>
+                    <select class="form-input" id="radiusBulkSource" onchange="onBulkSourceChange()">
+                      <option value="random">Random (DE:AD:BE OUI)</option>
+                      <option value="profiles">From YAML profiles — random profile per session (OUI + DHCP hints)</option>
+                      <option value="category">By device category — vendor OUI only</option>
+                    </select>
+                  </div>
+                  <div class="form-group" id="radiusDeviceCategoryRow" style="display:none">
+                    <label class="form-label cert-field-label">Device Category</label>
+                    <select class="form-input" id="radiusDeviceCategory">
+                      <option value="">— any —</option>
+                      <option value="laptop">Laptop (Intel / Apple / Dell / Lenovo)</option>
+                      <option value="desktop">Desktop (Intel / Dell / HP)</option>
+                      <option value="smartphone">Smartphone (Apple / Samsung / Google)</option>
+                      <option value="tablet">Tablet (Apple / Samsung)</option>
+                      <option value="printer">Printer (HP / Brother / Xerox / Ricoh / Lexmark)</option>
+                      <option value="iot">IoT (Amazon / Google / Roku / Cisco / Samsung)</option>
+                      <option value="server">Server (Dell / HPE / Parallels)</option>
+                      <option value="gaming">Gaming (Nintendo / Sony / Microsoft)</option>
+                      <option value="medical">Medical (Philips / BD / GE)</option>
+                      <option value="industrial">Industrial (Siemens / Allen-Bradley / Honeywell)</option>
+                    </select>
+                  </div>
                   <div class="form-group">
-                    <label class="form-label cert-field-label">Base MAC <span class="form-hint-inline">(blank = random per session)</span></label>
+                    <label class="form-label cert-field-label">Base MAC <span class="form-hint-inline">(optional — overrides source above; increments per session)</span></label>
                     <input type="text" class="form-input" id="radiusBaseMac" placeholder="AA:BB:CC:00:00:00">
                   </div>
                 </div>
               </div>
             </details>
+
+            <div class="form-group" id="radiusSessionLifetimeRow" style="margin-top:12px">
+              <label class="form-label cert-field-label">Session Lifetime
+                <span class="form-hint-inline">— applies to single <em>and</em> bulk. Use <b>Manual</b> for CoA testing; <b>Immediate</b> for bulk load/report runs.</span>
+              </label>
+              <select class="form-input" id="radiusSessionLifetime" style="max-width:260px">
+                <option value="-1" selected>Immediate (Acct-Start + Stop)</option>
+                <option value="0">Manual (live until terminated)</option>
+                <option value="60">1 minute</option>
+                <option value="300">5 minutes</option>
+                <option value="900">15 minutes</option>
+                <option value="3600">1 hour</option>
+              </select>
+            </div>
 
             <div class="cert-action-row" style="margin-top:16px">
               <button class="btn btn-accent" id="radiusRunBtn" onclick="runRadiusSessions()">Run</button>
@@ -577,11 +687,45 @@
           </div>
         </div>
 
+        <!-- ── Live Sessions ─────────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#128994;</span>
+            <h2 class="cert-section-title">Live Sessions <span class="stepca-badge" id="liveSessionsBadge" style="display:none">0 active</span></h2>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" onclick="loadLiveSessions()">Refresh</button>
+              <button class="btn btn-sm btn-remove" onclick="terminateAllLiveSessions()" id="terminateAllBtn" style="display:none">Terminate All</button>
+            </div>
+          </div>
+          <div id="liveSessionsEmpty" style="padding:12px 16px;color:var(--text-muted);font-size:13px">
+            No live sessions — run a session with lifetime <b>Manual</b> or timed to create one.
+          </div>
+          <div class="cert-table-card" id="liveSessionsTableWrap" style="display:none">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="liveSessionsTable">
+                <thead>
+                  <tr>
+                    <th>Acct-Session-ID</th>
+                    <th>Type</th>
+                    <th>MAC</th>
+                    <th>Username</th>
+                    <th>Framed IP</th>
+                    <th>Uptime</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="liveSessionsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <!-- ── CoA Events ────────────────────────────────── -->
         <div class="cert-section">
           <div class="cert-section-hdr">
             <span class="cert-section-icon">&#9889;</span>
             <h2 class="cert-section-title">CoA Events <span class="stepca-badge" id="coaListenerBadge" style="display:none">Listening</span></h2>
+            <button class="btn btn-sm btn-secondary" onclick="clearCoaEvents()" style="margin-left:auto">Clear</button>
           </div>
           <div class="cert-table-card">
             <div class="cert-table-wrap">

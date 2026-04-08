@@ -10,7 +10,9 @@ Supported auth flows:
   - PEAP  – EAP-PEAP-MSCHAPv2 via eapol_test subprocess
 
 All flows include a full Accounting Start/Stop lifecycle.
-CoA listener (UDP :3799) receives ISE-initiated reauth/disconnect.
+CoA listener (UDP :1700) receives ISE-initiated reauth/disconnect.
+Port 1700 is the Cisco IOS CoA default used by ISE's built-in "Cisco" network
+device profile. Change to 3799 (RFC 5176) if using a custom NAD profile.
 """
 
 from __future__ import annotations
@@ -73,6 +75,10 @@ VALUE Acct-Status-Type Start 1
 VALUE Acct-Status-Type Stop 2
 VALUE NAS-Port-Type Ethernet 15
 VALUE Acct-Terminate-Cause User-Request 1
+VENDOR Cisco 9
+BEGIN-VENDOR Cisco
+ATTRIBUTE Cisco-AVPair 1 string
+END-VENDOR Cisco
 """
 
 # ─── Config Model ────────────────────────────────────────────────────
@@ -85,7 +91,7 @@ class RADIUSNADConfig(BaseModel):
     shared_secret: str = ""
     nas_ip: str = ""
     nas_identifier: str = "macforge-nad"
-    coa_port: int = 3799
+    coa_port: int = 1700
     coa_enabled: bool = False
 
 
@@ -105,12 +111,15 @@ def save_radius_nad_config(cfg: RADIUSNADConfig) -> None:
     logger.info("Saved RADIUS NAD config for %s", cfg.ise_radius_ip)
 
 
-# ─── Session Models ───────────────────────────────────────────────────
+# ─── Session Models & Live Session Store ─────────────────────────────
+
+
+_CERTS_DIR = DATA_DIR / "certs"
 
 
 class RADIUSSessionResult(BaseModel):
     session_id: str = ""
-    auth_type: Literal["mab", "pap", "peap"] = "mab"
+    auth_type: Literal["mab", "pap", "peap", "eap-tls"] = "mab"
     mac: str = ""
     username: str = ""
     result: Literal["accept", "reject", "error", "timeout"] = "error"
@@ -148,6 +157,112 @@ _bulk_state: dict[str, Any] = {
 
 _coa_transport: Optional[asyncio.DatagramTransport] = None
 
+# Live session store — sessions that have sent Acct-Start but NOT yet Acct-Stop.
+# Keyed by Acct-Session-Id. Allows CoA testing: ISE sees an active session until
+# we explicitly terminate it (manual, timer, or on receiving Disconnect-Request).
+_live_sessions: dict[str, dict] = {}
+
+
+# ─── Live session helpers ─────────────────────────────────────────────
+
+def _register_live_session(
+    cfg: RADIUSNADConfig,
+    acct_session_id: str,
+    mac: str,
+    username: str,
+    nas_port: int,
+    auth_type: str,
+    framed_ip: str = "",
+) -> None:
+    _live_sessions[acct_session_id] = {
+        "acct_session_id": acct_session_id,
+        "mac": mac,
+        "username": username,
+        "nas_port": nas_port,
+        "auth_type": auth_type,
+        "framed_ip": framed_ip,
+        "start_time": time.time(),
+        "_cfg": cfg,
+        "_timer_handle": None,
+    }
+    logger.info("Live session registered: %s (%s / %s)", acct_session_id, mac, username)
+
+
+def terminate_live_session_sync(
+    acct_session_id: str,
+    cause: str = "User-Request",
+) -> bool:
+    """Send Acct-Stop for a live session and remove it from the store.
+
+    Returns True if a live session was found and terminated, False otherwise.
+    The Acct-Session-Time is the real elapsed time since Acct-Start.
+    """
+    entry = _live_sessions.pop(acct_session_id, None)
+    if not entry:
+        return False
+    cfg: RADIUSNADConfig = entry["_cfg"]
+    elapsed = max(1, int(time.time() - entry["start_time"]))
+    in_oct, out_oct = _simulated_bytes(entry["auth_type"])
+    try:
+        _send_accounting_sync(
+            cfg, "Stop",
+            entry["mac"], entry["username"],
+            acct_session_id, entry["nas_port"],
+            auth_type=entry["auth_type"],
+            session_time_s=elapsed,
+            input_octets=in_oct,
+            output_octets=out_oct,
+            framed_ip=entry.get("framed_ip", ""),
+        )
+        logger.info(
+            "Live session terminated: %s (uptime %ds, cause=%s)",
+            acct_session_id, elapsed, cause,
+        )
+    except Exception as exc:
+        logger.warning("Acct-Stop failed for %s: %s", acct_session_id, exc)
+    return True
+
+
+async def terminate_live_session(acct_session_id: str, cause: str = "User-Request") -> bool:
+    """Async wrapper — terminate a live session from async context."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, terminate_live_session_sync, acct_session_id, cause
+    )
+
+
+async def terminate_all_live_sessions(cause: str = "User-Request") -> int:
+    """Terminate all live sessions. Returns count of sessions terminated."""
+    ids = list(_live_sessions.keys())
+    count = 0
+    for sid in ids:
+        if await terminate_live_session(sid, cause):
+            count += 1
+    return count
+
+
+def get_live_sessions() -> list[dict]:
+    """Return a serialisable list of currently live sessions, newest first."""
+    now = time.time()
+    result = []
+    for entry in _live_sessions.values():
+        result.append({
+            "acct_session_id": entry["acct_session_id"],
+            "mac": entry["mac"],
+            "username": entry["username"],
+            "auth_type": entry["auth_type"],
+            "framed_ip": entry.get("framed_ip", ""),
+            "start_time": entry["start_time"],
+            "uptime_secs": int(now - entry["start_time"]),
+        })
+    return sorted(result, key=lambda x: x["start_time"], reverse=True)
+
+
+async def _auto_terminate_after(acct_session_id: str, delay_secs: int) -> None:
+    """Asyncio task: wait delay_secs then send Acct-Stop for a live session."""
+    await asyncio.sleep(delay_secs)
+    await terminate_live_session(acct_session_id, "Session-Timeout")
+
 
 def get_session_log() -> list[RADIUSSessionResult]:
     return list(_session_log)
@@ -159,6 +274,10 @@ def clear_session_log() -> None:
 
 def get_coa_events() -> list[CoAEvent]:
     return list(_coa_events)
+
+
+def clear_coa_events() -> None:
+    _coa_events.clear()
 
 
 def get_bulk_state() -> dict:
@@ -264,13 +383,18 @@ def _local_ip() -> str:
 # ─── MAB Session ─────────────────────────────────────────────────────
 
 def _run_mab_session_sync(cfg: RADIUSNADConfig, mac: str,
-                           nas_port: int) -> RADIUSSessionResult:
+                           nas_port: int,
+                           _mab_live_session: bool = False,
+                           profile_attrs: dict | None = None) -> RADIUSSessionResult:
     """Send a MAB Access-Request to ISE (synchronous).
 
     MAB flow on a real switch:
       1. Detect link-up + no EAP response within 30s → send Access-Request
          (Service-Type=Call-Check, User-Name=MAC, User-Password=MAC)
       2. On Accept → send Acct-Start, hold session, send Acct-Stop
+
+    profile_attrs may carry DHCP hints (vendor_class, hostname) that are sent
+    as Cisco-AVPair VSAs to assist ISE profiling beyond OUI matching.
     """
     from pyrad import packet as ppacket
 
@@ -296,19 +420,41 @@ def _run_mab_session_sync(cfg: RADIUSNADConfig, mac: str,
         req["Service-Type"] = 10    # Call-Check — the MAB signal ISE looks for
         _fill_nas_attrs(req, cfg, nas_port, mac_colons, cfg.nas_identifier)
 
+        # Profiling hints: Cisco-AVPair VSAs carrying DHCP endpoint data so ISE
+        # can profile beyond OUI. Common values come from the device profile's
+        # dhcp.vendor_class (DHCP Option 60) and dhcp.hostname (Option 12).
+        if profile_attrs:
+            avpairs: list[str] = []
+            vendor_class = profile_attrs.get("vendor_class", "")
+            hostname = profile_attrs.get("hostname", "")
+            if vendor_class:
+                avpairs.append(f"dhcp-class-identifier={vendor_class}")
+            if hostname:
+                avpairs.append(f"dhcp-hostname={hostname}")
+            if avpairs:
+                try:
+                    # pyrad encodes a list as multiple separate VSA TLVs
+                    req["Cisco-AVPair"] = avpairs if len(avpairs) > 1 else avpairs[0]
+                except Exception:
+                    pass
+
         reply = c.SendPacket(req)
 
         if reply.code == ppacket.AccessAccept:
             result.result = "accept"
-            # Simulated session time + bytes make accounting realistic in ISE reports
-            sess_secs = random.randint(60, 600)
-            in_oct, out_oct = _simulated_bytes("mab")
             _send_accounting_sync(cfg, "Start", mac_colons, mac_clean,
                                   acct_session_id, nas_port, auth_type="mab")
-            _send_accounting_sync(cfg, "Stop", mac_colons, mac_clean,
-                                  acct_session_id, nas_port, auth_type="mab",
-                                  session_time_s=sess_secs,
-                                  input_octets=in_oct, output_octets=out_oct)
+            if _mab_live_session:
+                _register_live_session(cfg, acct_session_id, mac_colons, mac_clean,
+                                       nas_port, "mab")
+            else:
+                # Immediate simulated close — for bulk / report-only sessions
+                sess_secs = random.randint(60, 600)
+                in_oct, out_oct = _simulated_bytes("mab")
+                _send_accounting_sync(cfg, "Stop", mac_colons, mac_clean,
+                                      acct_session_id, nas_port, auth_type="mab",
+                                      session_time_s=sess_secs,
+                                      input_octets=in_oct, output_octets=out_oct)
         elif reply.code == ppacket.AccessReject:
             result.result = "reject"
             msgs = reply.get("Reply-Message", [])
@@ -330,7 +476,8 @@ def _run_mab_session_sync(cfg: RADIUSNADConfig, mac: str,
 
 def _run_pap_session_sync(cfg: RADIUSNADConfig, username: str,
                            password: str, nas_port: int,
-                           mac: str = "") -> RADIUSSessionResult:
+                           mac: str = "",
+                           live_session: bool = False) -> RADIUSSessionResult:
     """Send a PAP Access-Request to ISE (synchronous).
 
     PAP flow (e.g. VPN gateway, admin console, or non-EAP wired NAD):
@@ -368,16 +515,20 @@ def _run_pap_session_sync(cfg: RADIUSNADConfig, username: str,
 
         if reply.code == ppacket.AccessAccept:
             result.result = "accept"
-            sess_secs = random.randint(300, 3600)
-            in_oct, out_oct = _simulated_bytes("pap")
             _send_accounting_sync(cfg, "Start", mac_colons, username,
                                   acct_session_id, nas_port, auth_type="pap",
                                   framed_ip=framed_ip)
-            _send_accounting_sync(cfg, "Stop", mac_colons, username,
-                                  acct_session_id, nas_port, auth_type="pap",
-                                  session_time_s=sess_secs,
-                                  input_octets=in_oct, output_octets=out_oct,
-                                  framed_ip=framed_ip)
+            if live_session:
+                _register_live_session(cfg, acct_session_id, mac_colons, username,
+                                       nas_port, "pap", framed_ip)
+            else:
+                sess_secs = random.randint(300, 3600)
+                in_oct, out_oct = _simulated_bytes("pap")
+                _send_accounting_sync(cfg, "Stop", mac_colons, username,
+                                      acct_session_id, nas_port, auth_type="pap",
+                                      session_time_s=sess_secs,
+                                      input_octets=in_oct, output_octets=out_oct,
+                                      framed_ip=framed_ip)
         elif reply.code == ppacket.AccessReject:
             result.result = "reject"
             msgs = reply.get("Reply-Message", [])
@@ -399,7 +550,8 @@ def _run_pap_session_sync(cfg: RADIUSNADConfig, username: str,
 
 async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
                                    password: str, nas_port: int,
-                                   mac: str = "") -> RADIUSSessionResult:
+                                   mac: str = "",
+                                   live_session: bool = False) -> RADIUSSessionResult:
     """Run EAP-PEAP-MSCHAPv2 via eapol_test subprocess.
 
     PEAP-MSCHAPv2 flow on a real wired switch:
@@ -501,8 +653,6 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
                 f"10.{random.randint(1,254)}.{random.randint(0,254)}"
                 f".{random.randint(1,254)}"
             )
-            sess_secs = random.randint(300, 3600)
-            in_oct, out_oct = _simulated_bytes("peap")
             await loop.run_in_executor(
                 None,
                 lambda: _send_accounting_sync(
@@ -510,14 +660,20 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
                     auth_type="peap", framed_ip=framed_ip,
                 ),
             )
-            await loop.run_in_executor(
-                None,
-                lambda: _send_accounting_sync(
-                    cfg, "Stop", mac_colons, username, acct_session_id, nas_port,
-                    auth_type="peap", session_time_s=sess_secs,
-                    input_octets=in_oct, output_octets=out_oct, framed_ip=framed_ip,
-                ),
-            )
+            if live_session:
+                _register_live_session(cfg, acct_session_id, mac_colons, username,
+                                       nas_port, "peap", framed_ip)
+            else:
+                sess_secs = random.randint(300, 3600)
+                in_oct, out_oct = _simulated_bytes("peap")
+                await loop.run_in_executor(
+                    None,
+                    lambda: _send_accounting_sync(
+                        cfg, "Stop", mac_colons, username, acct_session_id, nas_port,
+                        auth_type="peap", session_time_s=sess_secs,
+                        input_octets=in_oct, output_octets=out_oct, framed_ip=framed_ip,
+                    ),
+                )
         elif "FAILURE" in output:
             result.result = "reject"
             # Extract the most informative failure reason from the log.
@@ -551,6 +707,219 @@ async def _run_peap_session_async(cfg: RADIUSNADConfig, username: str,
 
     result.duration_ms = int((time.monotonic() - t0) * 1000)
     return result
+
+
+# ─── EAP-TLS Session (via eapol_test) ────────────────────────────────
+
+async def _run_eaptls_session_async(
+    cfg: RADIUSNADConfig,
+    identity: str,
+    cert_file: str,
+    key_file: str,
+    nas_port: int = 1,
+    mac: str = "",
+    validate_server_cert: bool = False,
+    ise_ca_cert_file: str = "",
+    live_session: bool = False,
+) -> RADIUSSessionResult:
+    """Run EAP-TLS via eapol_test subprocess.
+
+    EAP-TLS flow on a real wired switch:
+      1. Client sends EAP-Response/Identity (often anonymous for outer, real
+         identity embedded in the certificate)
+      2. TLS handshake — client presents certificate, ISE validates against
+         trusted CA, checks CN/SAN against identity store (AD or Internal PKI)
+      3. Access-Accept with MPPE keying material → Acct-Start/Stop
+
+    Two separate CA chains:
+      - Client cert CA (our lab-ca.pem) → loaded into ISE Trusted Certificates
+        so ISE can verify the client certificate.
+      - ISE server cert CA → needed by eapol_test to verify ISE's TLS cert.
+        For lab testing set validate_server_cert=False (ca_cert=/dev/null) which
+        matches how PEAP works. Set to True and supply ise_ca_cert_file only when
+        strict mutual TLS validation is required.
+    """
+    mac_colons = mac if mac else _random_mac()
+    acct_session_id = str(uuid.uuid4())[:8].upper()
+
+    result = RADIUSSessionResult(
+        session_id=str(uuid.uuid4()),
+        auth_type="eap-tls",
+        mac=mac_colons,
+        username=identity,
+        acct_session_id=acct_session_id,
+        timestamp=time.time(),
+    )
+
+    if not Path(EAPOL_TEST_BIN).exists():
+        result.result = "error"
+        result.detail = (
+            f"eapol_test not found at {EAPOL_TEST_BIN}. "
+            "Rebuild the Docker image to compile eapol_test from hostap source."
+        )
+        return result
+
+    cert_path = _CERTS_DIR / cert_file
+    key_path  = _CERTS_DIR / key_file
+
+    for path, label in [(cert_path, "client cert"), (key_path, "private key")]:
+        if not path.exists():
+            result.result = "error"
+            result.detail = f"File not found: {label} ({path.name}) — check Certificates tab"
+            return result
+
+    # Determine ca_cert line for eapol_test:
+    #   validate_server_cert=False (lab default) → ca_cert="/dev/null" skips ISE cert
+    #   validation entirely (same behaviour as our PEAP sessions).
+    #   validate_server_cert=True → use the supplied ISE CA cert file.
+    if validate_server_cert and ise_ca_cert_file:
+        ise_ca_path = _CERTS_DIR / ise_ca_cert_file
+        if not ise_ca_path.exists():
+            result.result = "error"
+            result.detail = f"ISE CA cert not found: {ise_ca_cert_file}"
+            return result
+        ca_cert_line = f'  ca_cert="{ise_ca_path}"\n'
+    else:
+        # Skip ISE server cert verification — appropriate for lab/testing.
+        ca_cert_line = '  ca_cert="/dev/null"\n'
+
+    conf_content = (
+        "network={\n"
+        "  key_mgmt=IEEE8021X\n"
+        "  eap=TLS\n"
+        f'  identity="{identity}"\n'
+        + ca_cert_line
+        + f'  client_cert="{cert_path}"\n'
+        f'  private_key="{key_path}"\n'
+        '  private_key_passwd=""\n'
+        '}\n'
+    )
+
+    t0 = time.monotonic()
+    tmp_conf = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".conf", delete=False, prefix="/tmp/mf_eaptls_"
+        ) as f:
+            f.write(conf_content)
+            tmp_conf = f.name
+
+        nas_ip = cfg.nas_ip or _local_ip()
+        import binascii as _ba
+        nas_ip_hex = _ba.hexlify(socket.inet_aton(nas_ip)).decode()
+        cmd = [
+            EAPOL_TEST_BIN,
+            "-c", tmp_conf,
+            "-a", cfg.ise_radius_ip,
+            "-p", str(cfg.radius_port),
+            "-s", cfg.shared_secret,
+            "-N", f"4:x:{nas_ip_hex}",           # NAS-IP-Address
+            "-N", f"32:s:{cfg.nas_identifier}",   # NAS-Identifier
+            "-N", f"31:s:{mac_colons}",            # Calling-Station-Id
+            "-N", f"5:d:{nas_port}",               # NAS-Port
+            "-N", "61:d:15",                       # NAS-Port-Type = Ethernet
+            "-N", "77:s:CONNECT 1Gbps 802.3",      # Connect-Info = wired GigE
+            "-r", "0",                             # no retries
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            result.result = "timeout"
+            result.detail = "eapol_test timed out after 30s — check ISE EAP-TLS policy and trusted CA"
+            result.duration_ms = int((time.monotonic() - t0) * 1000)
+            return result
+
+        output = (stdout + stderr).decode(errors="replace")
+        logger.debug("eapol_test EAP-TLS output:\n%s", output[-2000:])
+
+        if "SUCCESS" in output:
+            result.result = "accept"
+            loop = asyncio.get_event_loop()
+            framed_ip = (
+                f"10.{random.randint(1,254)}.{random.randint(0,254)}"
+                f".{random.randint(1,254)}"
+            )
+            await loop.run_in_executor(
+                None,
+                lambda: _send_accounting_sync(
+                    cfg, "Start", mac_colons, identity, acct_session_id, nas_port,
+                    auth_type="peap", framed_ip=framed_ip,
+                ),
+            )
+            if live_session:
+                _register_live_session(cfg, acct_session_id, mac_colons, identity,
+                                       nas_port, "eap-tls", framed_ip)
+            else:
+                sess_secs = random.randint(300, 3600)
+                in_oct, out_oct = _simulated_bytes("peap")
+                await loop.run_in_executor(
+                    None,
+                    lambda: _send_accounting_sync(
+                        cfg, "Stop", mac_colons, identity, acct_session_id, nas_port,
+                        auth_type="peap", session_time_s=sess_secs,
+                        input_octets=in_oct, output_octets=out_oct, framed_ip=framed_ip,
+                    ),
+                )
+        elif "FAILURE" in output:
+            result.result = "reject"
+            detail = ""
+            for line in output.splitlines():
+                low = line.lower()
+                if any(kw in low for kw in ("tls alert", "certificate", "verify", "ssl_connect")):
+                    detail = line.strip()
+                    break
+            result.detail = detail[:200] if detail else "Access-Reject from ISE"
+        else:
+            meaningful = [
+                l.strip() for l in output.splitlines()
+                if l.strip() and not l.startswith("OpenSSL")
+            ]
+            result.result = "error"
+            result.detail = (meaningful[-1] if meaningful else output[-200:])[:200]
+
+    except Exception as exc:
+        result.result = "error"
+        result.detail = str(exc)[:200]
+    finally:
+        if tmp_conf:
+            Path(tmp_conf).unlink(missing_ok=True)
+
+    result.duration_ms = int((time.monotonic() - t0) * 1000)
+    return result
+
+
+# ─── Cert helpers ─────────────────────────────────────────────────────
+
+def list_available_certs() -> list[dict]:
+    """Return metadata for all PEM files in CERTS_DIR that have a matching key."""
+    from macforge.certgen import parse_cert_info
+    results = []
+    if not _CERTS_DIR.exists():
+        return results
+    for pem in sorted(_CERTS_DIR.glob("*.pem")):
+        try:
+            info = parse_cert_info(pem.name)
+            info["key_file"] = pem.stem + ".key"
+            info["has_key"] = (_CERTS_DIR / (pem.stem + ".key")).exists()
+            results.append(info)
+        except Exception:
+            results.append({
+                "filename": pem.name,
+                "cn": pem.stem,
+                "is_ca": False,
+                "has_key": (_CERTS_DIR / (pem.stem + ".key")).exists(),
+            })
+    return results
 
 
 # ─── RADIUS Accounting ────────────────────────────────────────────────
@@ -617,28 +986,62 @@ def _send_accounting_sync(
 
 async def run_single_session(
     cfg: RADIUSNADConfig,
-    auth_type: Literal["mab", "pap", "peap"],
+    auth_type: Literal["mab", "pap", "peap", "eap-tls"],
     mac: str = "",
     username: str = "",
     password: str = "",
     nas_port: int = 1,
+    oui_prefix: str = "",
+    # Session lifetime:
+    #   -1 = immediate simulated close (Acct-Start + Acct-Stop back-to-back)
+    #    0 = live until manually terminated (good for CoA testing)
+    #   >0 = live for N seconds then auto-terminate
+    session_lifetime_secs: int = 0,
+    # EAP-TLS specific
+    cert_file: str = "",
+    key_file: str = "",
+    validate_server_cert: bool = False,
+    ise_ca_cert_file: str = "",
+    # MAB profiling hints from a selected device profile
+    profile_attrs: dict | None = None,
 ) -> RADIUSSessionResult:
     """Run one auth+accounting session and record it in the log."""
     loop = asyncio.get_event_loop()
+    live = (session_lifetime_secs != -1)
 
     if auth_type == "mab":
-        target_mac = mac or _random_mac()
+        target_mac = mac or _random_mac(oui_prefix) if oui_prefix else (mac or _random_mac())
         result = await loop.run_in_executor(
-            None, _run_mab_session_sync, cfg, target_mac, nas_port
+            None, _run_mab_session_sync, cfg, target_mac, nas_port, live, profile_attrs
         )
     elif auth_type == "pap":
         result = await loop.run_in_executor(
-            None, _run_pap_session_sync, cfg, username, password, nas_port, mac
+            None, _run_pap_session_sync, cfg, username, password, nas_port, mac, live
         )
     elif auth_type == "peap":
-        result = await _run_peap_session_async(cfg, username, password, nas_port, mac)
+        result = await _run_peap_session_async(cfg, username, password, nas_port, mac,
+                                               live_session=live)
+    elif auth_type == "eap-tls":
+        if not cert_file or not key_file:
+            r = RADIUSSessionResult(auth_type="eap-tls", timestamp=time.time())
+            r.result = "error"
+            r.detail = "cert_file and key_file are required for EAP-TLS"
+            _session_log.appendleft(r)
+            return r
+        result = await _run_eaptls_session_async(
+            cfg, username, cert_file, key_file, nas_port, mac,
+            validate_server_cert=validate_server_cert,
+            ise_ca_cert_file=ise_ca_cert_file,
+            live_session=live,
+        )
     else:
         raise ValueError(f"Unknown auth_type: {auth_type!r}")
+
+    # Schedule auto-terminate for timed live sessions
+    if live and result.result == "accept" and session_lifetime_secs > 0:
+        asyncio.create_task(
+            _auto_terminate_after(result.acct_session_id, session_lifetime_secs)
+        )
 
     _session_log.appendleft(result)
     return result
@@ -653,13 +1056,28 @@ def _random_mac(oui: str = "DE:AD:BE") -> str:
 
 async def run_bulk_sessions(
     cfg: RADIUSNADConfig,
-    auth_type: Literal["mab", "pap", "peap"],
+    auth_type: Literal["mab", "pap", "peap", "eap-tls"],
     count: int,
     concurrency: int,
     delay_ms: int,
     base_mac: str = "",
+    oui_prefix: str = "",       # e.g. "64:4E:D7" for HP printers; overrides random OUI
     username_template: str = "user{n}@lab.local",
     password: str = "",
+    # EAP-TLS (bulk uses same cert for all sessions — machine/device cert scenario)
+    cert_file: str = "",
+    key_file: str = "",
+    validate_server_cert: bool = False,
+    ise_ca_cert_file: str = "",
+    # Profile pool: when set, each session picks a random profile entry for
+    # realistic OUI + DHCP vendor class diversity across the bulk run.
+    # Each entry: {"oui": "AA:BB:CC", "vendor_class": "...", "hostname": "...", ...}
+    profile_pool: list[dict] | None = None,
+    # Session lifetime — same semantics as run_single_session:
+    #   -1 = immediate close (Acct-Start + Stop back-to-back)
+    #    0 = live until manually terminated
+    #   >0 = live for N seconds then auto-terminate
+    session_lifetime_secs: int = -1,
 ) -> None:
     """Run multiple sessions concurrently, updating _bulk_state in real time."""
     global _bulk_state
@@ -686,19 +1104,45 @@ async def run_bulk_sessions(
             if delay_ms > 0:
                 await asyncio.sleep(delay_ms / 1000.0)
 
-            mac = _random_mac() if not base_mac else _increment_mac(base_mac, n)
+            p_attrs: dict | None = None
+            if profile_pool:
+                chosen = random.choice(profile_pool)
+                mac = _random_mac(chosen["oui"])
+                p_attrs = chosen
+            elif base_mac:
+                mac = _increment_mac(base_mac, n)
+            elif oui_prefix:
+                mac = _random_mac(oui_prefix)
+            else:
+                mac = _random_mac()
             uname = username_template.format(n=n)
+            live = (session_lifetime_secs != -1)
 
             if auth_type == "mab":
                 result = await loop.run_in_executor(
-                    None, _run_mab_session_sync, cfg, mac, n + 1
+                    None, _run_mab_session_sync, cfg, mac, n + 1, live, p_attrs
                 )
             elif auth_type == "pap":
                 result = await loop.run_in_executor(
-                    None, _run_pap_session_sync, cfg, uname, password, n + 1, mac
+                    None, _run_pap_session_sync, cfg, uname, password, n + 1, mac, live
+                )
+            elif auth_type == "eap-tls":
+                result = await _run_eaptls_session_async(
+                    cfg, uname, cert_file, key_file, n + 1, mac,
+                    validate_server_cert=validate_server_cert,
+                    ise_ca_cert_file=ise_ca_cert_file,
+                    live_session=live,
                 )
             else:
-                result = await _run_peap_session_async(cfg, uname, password, n + 1, mac)
+                result = await _run_peap_session_async(
+                    cfg, uname, password, n + 1, mac, live_session=live
+                )
+
+            # Schedule auto-terminate for timed live sessions
+            if live and result.result == "accept" and session_lifetime_secs > 0:
+                asyncio.create_task(
+                    _auto_terminate_after(result.acct_session_id, session_lifetime_secs)
+                )
 
             _session_log.appendleft(result)
             if result.result == "accept":
@@ -870,6 +1314,17 @@ class _CoAListenerProtocol(asyncio.DatagramProtocol):
             "CoA: %s from %s — MAC=%s session=%s → CoA-ACK",
             event_type, addr[0], calling_mac, session_id,
         )
+
+        # If ISE sent a Disconnect-Request for one of our live sessions,
+        # send Acct-Stop now so ISE's session cache is cleanly closed.
+        if event_type == "Disconnect-Request" and session_id in _live_sessions:
+            asyncio.ensure_future(
+                terminate_live_session(session_id, "Admin-Reset")
+            )
+            logger.info(
+                "CoA Disconnect-Request matched live session %s — Acct-Stop queued",
+                session_id,
+            )
 
     def error_received(self, exc: Exception) -> None:
         logger.warning("CoA listener error: %s", exc)

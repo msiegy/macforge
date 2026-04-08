@@ -17,10 +17,12 @@ from macforge.radius_nad import (
     RADIUSNADConfig,
     RADIUSSessionResult,
     cancel_bulk,
+    clear_coa_events,
     clear_session_log,
     export_sessions_csv,
     get_bulk_state,
     get_coa_events,
+    get_live_sessions,
     get_session_log,
     load_radius_nad_config,
     register_nad_in_ise,
@@ -30,6 +32,8 @@ from macforge.radius_nad import (
     run_single_session,
     save_radius_nad_config,
     start_coa_listener,
+    terminate_all_live_sessions,
+    terminate_live_session,
     test_radius_connection_sync,
     _coa_event_queue,
 )
@@ -1275,7 +1279,7 @@ class RADIUSNADConfigPayload(BaseModel):
     shared_secret: str = ""
     nas_ip: str = ""
     nas_identifier: str = "macforge-nad"
-    coa_port: int = 3799
+    coa_port: int = 1700
     coa_enabled: bool = False
 
 
@@ -1304,6 +1308,66 @@ async def update_radius_config(payload: RADIUSNADConfigPayload):
     return {"status": "saved"}
 
 
+@app.get("/api/radius/profiles")
+async def get_radius_profiles():
+    """Return device profiles (name, mac, oui, category, device_type) for the NAD emulator."""
+    from macforge.profiles import load_profiles
+    profiles = load_profiles()
+    result = []
+    for p in profiles:
+        oui = ":".join(p.mac.upper().split(":")[:3])
+        result.append({
+            "name": p.name,
+            "mac": p.mac,
+            "oui": oui,
+            "category": p.personality.category,
+            "device_type": p.personality.device_type,
+            "os": p.personality.os,
+            "dhcp_hostname": p.dhcp.hostname,
+            "dhcp_vendor_class": p.dhcp.vendor_class,
+            "auth_method": p.auth.method if p.auth else None,
+        })
+    return result
+
+
+class IssueCertPayload(BaseModel):
+    cn: str
+    san_emails: list[str] = []
+    ca_cert_file: str = "lab-ca.pem"
+    ca_key_file: str = "lab-ca.key"
+    days: int = 3650
+
+
+@app.get("/api/radius/certs")
+async def list_radius_certs():
+    """List PEM files in the certs directory with metadata."""
+    from macforge.radius_nad import list_available_certs
+    return list_available_certs()
+
+
+@app.post("/api/radius/certs/issue")
+async def issue_radius_cert(payload: IssueCertPayload):
+    """Issue a new client certificate signed by the lab CA for EAP-TLS."""
+    from macforge.certgen import generate_client_cert
+    loop = asyncio.get_event_loop()
+    try:
+        info = await loop.run_in_executor(
+            None,
+            lambda: generate_client_cert(
+                cn=payload.cn,
+                san_list=payload.san_emails or None,
+                ca_cert_file=payload.ca_cert_file,
+                ca_key_file=payload.ca_key_file,
+                days=payload.days,
+            ),
+        )
+        return {"status": "ok", **info}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/api/radius/local-ip")
 async def get_radius_local_ip():
     """Return the host IP that ISE will see as the UDP source of RADIUS packets."""
@@ -1323,26 +1387,60 @@ async def test_radius_connection():
 class RunSessionPayload(BaseModel):
     auth_type: str = "mab"
     mac: str = ""
+    oui_prefix: str = ""        # when MAC blank, randomise within this OUI (e.g. "64:4E:D7")
     username: str = ""
     password: str = ""
     nas_port: int = 1
+    # Session lifetime:
+    #   -1 = immediate (Acct-Start + Stop back-to-back, for bulk/report-only)
+    #    0 = live until manually terminated (default for single sessions — CoA testing)
+    #   >0 = live for N seconds then auto-terminate
+    session_lifetime_secs: int = 0
+    # EAP-TLS
+    cert_file: str = ""
+    key_file: str = ""
+    validate_server_cert: bool = False
+    ise_ca_cert_file: str = ""
+    # MAB profiling: name of the device profile whose DHCP/vendor attributes to
+    # send as Cisco-AVPairs in the Access-Request to assist ISE profiling.
+    profile_name: str = ""
 
 
 @app.post("/api/radius/run-session")
 async def api_run_session(payload: RunSessionPayload):
+    from macforge.profiles import load_profiles
     cfg = load_radius_nad_config()
     if not cfg.ise_radius_ip or not cfg.shared_secret:
         raise HTTPException(status_code=400, detail="RADIUS NAD not configured")
-    if payload.auth_type not in ("mab", "pap", "peap"):
-        raise HTTPException(status_code=400, detail="auth_type must be: mab, pap, peap")
+    if payload.auth_type not in ("mab", "pap", "peap", "eap-tls"):
+        raise HTTPException(status_code=400, detail="auth_type must be: mab, pap, peap, eap-tls")
+
+    # Resolve profiling attributes from the selected profile
+    profile_attrs: dict | None = None
+    if payload.profile_name and payload.auth_type == "mab":
+        profiles = load_profiles()
+        matched = next((p for p in profiles if p.name == payload.profile_name), None)
+        if matched:
+            profile_attrs = {
+                "vendor_class": matched.dhcp.vendor_class if matched.dhcp else "",
+                "hostname": matched.dhcp.hostname if matched.dhcp else "",
+                "profile_name": matched.name,
+            }
 
     result = await run_single_session(
         cfg=cfg,
         auth_type=payload.auth_type,   # type: ignore[arg-type]
         mac=payload.mac,
+        oui_prefix=payload.oui_prefix,
         username=payload.username,
         password=payload.password,
         nas_port=payload.nas_port,
+        session_lifetime_secs=payload.session_lifetime_secs,
+        cert_file=payload.cert_file,
+        key_file=payload.key_file,
+        validate_server_cert=payload.validate_server_cert,
+        ise_ca_cert_file=payload.ise_ca_cert_file,
+        profile_attrs=profile_attrs,
     )
     return result.model_dump()
 
@@ -1357,6 +1455,28 @@ async def get_radius_sessions(limit: int = 200):
 async def delete_radius_sessions():
     clear_session_log()
     return {"status": "cleared"}
+
+
+@app.get("/api/radius/live-sessions")
+async def api_get_live_sessions():
+    """Return currently live sessions (Acct-Start sent, Acct-Stop not yet sent)."""
+    return get_live_sessions()
+
+
+@app.delete("/api/radius/live-sessions/{session_id}")
+async def api_terminate_live_session(session_id: str):
+    """Send Acct-Stop for a specific live session and remove it."""
+    terminated = await terminate_live_session(session_id, "User-Request")
+    if not terminated:
+        raise HTTPException(status_code=404, detail="Live session not found")
+    return {"status": "terminated", "acct_session_id": session_id}
+
+
+@app.delete("/api/radius/live-sessions")
+async def api_terminate_all_live_sessions():
+    """Send Acct-Stop for all live sessions."""
+    count = await terminate_all_live_sessions("User-Request")
+    return {"status": "terminated", "count": count}
 
 
 @app.get("/api/radius/sessions/export")
@@ -1375,12 +1495,26 @@ class BulkRunPayload(BaseModel):
     concurrency: int = 5
     delay_ms: int = 0
     base_mac: str = ""
+    # bulk_source controls how MACs (and profiling hints) are generated:
+    #   "random"   – random OUI DE:AD:BE (legacy default)
+    #   "category" – random OUI from a specific device category (uses device_category)
+    #   "profiles" – randomly selects from all YAML device profiles per session
+    bulk_source: str = "random"
+    device_category: str = ""       # used when bulk_source == "category"
     username_template: str = "user{n}@lab.local"
     password: str = ""
+    session_lifetime_secs: int = -1  # default: immediate close (don't flood live-sessions)
+    # EAP-TLS bulk (same cert for all sessions; machine/device cert scenario)
+    cert_file: str = ""
+    key_file: str = ""
+    validate_server_cert: bool = False
+    ise_ca_cert_file: str = ""
 
 
 @app.post("/api/radius/bulk/start")
 async def start_bulk_run(payload: BulkRunPayload):
+    from macforge.profiles import VENDOR_OUIS, load_profiles
+    import random as _rnd
     cfg = load_radius_nad_config()
     if not cfg.ise_radius_ip or not cfg.shared_secret:
         raise HTTPException(status_code=400, detail="RADIUS NAD not configured")
@@ -1391,6 +1525,32 @@ async def start_bulk_run(payload: BulkRunPayload):
         raise HTTPException(status_code=400, detail="count must be 1–10000")
     if payload.concurrency < 1 or payload.concurrency > 200:
         raise HTTPException(status_code=400, detail="concurrency must be 1–200")
+    if payload.auth_type == "eap-tls" and (not payload.cert_file or not payload.key_file):
+        raise HTTPException(status_code=400, detail="cert_file and key_file are required for EAP-TLS bulk runs")
+
+    oui_prefix = ""
+    profile_pool: list[dict] | None = None
+
+    if payload.bulk_source == "profiles" and payload.auth_type == "mab":
+        # Build a pool from all YAML device profiles — each session randomly picks one
+        all_profiles = load_profiles()
+        pool = []
+        for p in all_profiles:
+            mac_clean = p.mac.lower().replace(":", "").replace("-", "")
+            # Use first 6 hex chars as OUI (AA:BB:CC format)
+            oui = ":".join(mac_clean[i:i+2].upper() for i in range(0, 6, 2)) if len(mac_clean) >= 6 else "DE:AD:BE"
+            pool.append({
+                "oui": oui,
+                "vendor_class": p.dhcp.vendor_class if p.dhcp else "",
+                "hostname": p.dhcp.hostname if p.dhcp else "",
+                "profile_name": p.name,
+            })
+        if pool:
+            profile_pool = pool
+    elif payload.bulk_source == "category" and payload.device_category:
+        if payload.device_category in VENDOR_OUIS:
+            entries = VENDOR_OUIS[payload.device_category]
+            oui_prefix = _rnd.choice(entries)["oui"]
 
     asyncio.create_task(run_bulk_sessions(
         cfg=cfg,
@@ -1399,8 +1559,15 @@ async def start_bulk_run(payload: BulkRunPayload):
         concurrency=payload.concurrency,
         delay_ms=payload.delay_ms,
         base_mac=payload.base_mac,
+        oui_prefix=oui_prefix,
         username_template=payload.username_template,
         password=payload.password,
+        cert_file=payload.cert_file,
+        key_file=payload.key_file,
+        validate_server_cert=payload.validate_server_cert,
+        ise_ca_cert_file=payload.ise_ca_cert_file,
+        profile_pool=profile_pool,
+        session_lifetime_secs=payload.session_lifetime_secs,
     ))
     return {"status": "started", "total": payload.count}
 
@@ -1414,6 +1581,13 @@ async def get_bulk_status():
 async def cancel_bulk_run():
     cancel_bulk()
     return {"status": "cancelling"}
+
+
+@app.delete("/api/radius/coa-events")
+async def api_clear_coa_events():
+    """Clear all buffered CoA events."""
+    clear_coa_events()
+    return {"status": "cleared"}
 
 
 @app.get("/api/radius/coa-events")
