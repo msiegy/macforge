@@ -144,7 +144,7 @@
               <button class="cert-tab active" data-certtab="labca" onclick="switchCertTab('labca')">Issue (Lab CA)</button>
               <button class="cert-tab" data-certtab="import" onclick="switchCertTab('import')">Import</button>
               <button class="cert-tab" data-certtab="csr" onclick="switchCertTab('csr')">Request (CSR)</button>
-              <button class="cert-tab" data-certtab="enterprise" onclick="switchCertTab('enterprise')">SCEP / NDES Enrollment</button>
+              <button class="cert-tab" data-certtab="ndes" onclick="switchCertTab('ndes')">NDES Setup</button>
             </nav>
 
             <!-- Issue (Lab CA) tab -->
@@ -232,82 +232,34 @@
               </div>
             </div>
 
-            <!-- SCEP / NDES Enrollment tab -->
-            <div class="cert-tab-pane" id="certtab-enterprise">
+            <!-- NDES Setup tab -->
+            <div class="cert-tab-pane" id="certtab-ndes">
               <div class="cert-tab-body">
-                <div id="enrollCaps" class="cert-caps-bar"></div>
-
-                <!-- Primary: AD CS / NDES SCEP -->
-                <h3 class="cert-subsection-title">AD CS / NDES Enrollment</h3>
-                <p class="cert-form-desc">Request a certificate directly from your enterprise Microsoft PKI (Active Directory Certificate Services) via the NDES SCEP endpoint. This is the most common enterprise deployment — use this if your organization runs AD CS.</p>
-                <div class="cert-issue-grid">
+                <p class="cert-form-desc">Save your NDES server URL and challenge as global settings. CN and SAN are specified <strong>per endpoint</strong> at enrollment time in the device drawer.</p>
+                <div class="ise-panel-grid">
                   <div class="form-group">
                     <label class="form-label cert-field-label">NDES URL</label>
-                    <input type="text" class="form-input" id="scepUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
-                    <span class="form-hint">Pre-filled from saved NDES configuration. Override here for a one-off enrollment.</span>
+                    <input type="text" class="form-input" id="ndesConfigUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
+                    <span class="form-hint">Saved globally — pre-fills the SCEP enrollment form in the endpoint drawer</span>
                   </div>
                   <div class="form-group">
-                    <label class="form-label cert-field-label">Challenge Password</label>
+                    <label class="form-label cert-field-label">Default Challenge Password <span class="form-hint-inline">(optional)</span></label>
                     <div class="password-wrapper">
-                      <input type="password" class="form-input" id="scepChallenge" placeholder="One-time password from NDES">
-                      <button type="button" class="password-toggle" onclick="togglePasswordVis('scepChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                      <input type="password" class="form-input" id="ndesConfigChallenge" placeholder="Leave blank if not required">
+                      <button type="button" class="password-toggle" onclick="togglePasswordVis('ndesConfigChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
                     </div>
-                    <span class="form-hint">Pre-filled from saved default if set. Override with a one-time password as needed.</span>
-                  </div>
-                  <div class="form-group">
-                    <label class="form-label cert-field-label">Common Name (CN)</label>
-                    <input type="text" class="form-input" id="scepCN" placeholder="testuser@corp.local">
-                    <span class="form-hint">Usually matches the 802.1X identity (username)</span>
-                  </div>
-                  <div class="form-group">
-                    <label class="form-label cert-field-label">Subject Alt Name <span class="form-hint-inline">(optional)</span></label>
-                    <input type="text" class="form-input" id="scepSAN" placeholder="user@corp.local or DNS:host.corp.com">
-                    <span class="form-hint">Required by some ISE policies. Use email: or DNS: prefix.</span>
+                    <span class="form-hint">Static lab challenges can be saved here. Real NDES OTPs expire in minutes — enter those at enrollment time in the drawer.</span>
                   </div>
                 </div>
-                <div class="cert-action-row">
-                  <button class="btn btn-secondary" onclick="testNDES()">Test NDES</button>
-                  <button class="btn btn-accent" onclick="enrollSCEP()">Enroll via SCEP</button>
+                <div class="ise-panel-actions">
+                  <button class="btn btn-save" onclick="saveNDESConfig()">Save Settings</button>
+                  <button class="btn btn-section-connect" onclick="testNDESConfig()">Test NDES</button>
                 </div>
-                <div id="scepResult" class="cert-result"></div>
-
-                <hr class="cert-divider">
-
-                <!-- Secondary: step-ca (advanced / no AD CS) -->
-                <details class="stepca-details">
-                  <summary class="stepca-summary">
-                    <span class="stepca-summary-title">Alternative: step-ca <span class="stepca-badge">Advanced</span></span>
-                    <span class="stepca-summary-desc">Use this only if you don&apos;t have AD CS/NDES. Requires a step-ca Docker sidecar.</span>
-                  </summary>
-                  <div class="stepca-body">
-                    <p class="cert-form-desc">step-ca is a lightweight open-source CA you can run as a Docker container alongside MACforge. It replaces the need for a full Microsoft PKI in isolated lab environments where you have no access to AD CS/NDES.</p>
-                    <div class="cert-issue-grid">
-                      <div class="form-group">
-                        <label class="form-label cert-field-label">step-ca URL</label>
-                        <input type="text" class="form-input" id="stepCaUrl" value="https://step-ca:9000">
-                      </div>
-                      <div class="form-group">
-                        <label class="form-label cert-field-label">Provisioner</label>
-                        <input type="text" class="form-input" id="stepCaProv" value="macforge">
-                      </div>
-                      <div class="form-group">
-                        <label class="form-label cert-field-label">CA Fingerprint <span class="form-hint-inline">(optional)</span></label>
-                        <input type="text" class="form-input" id="stepCaFP" placeholder="SHA-256 fingerprint">
-                      </div>
-                      <div class="form-group">
-                        <label class="form-label cert-field-label">Common Name (CN)</label>
-                        <input type="text" class="form-input" id="stepCaCN" placeholder="testuser@lab.local">
-                      </div>
-                    </div>
-                    <div class="cert-action-row">
-                      <button class="btn btn-accent" onclick="enrollStepCA()">Enroll via step-ca</button>
-                    </div>
-                    <div id="stepCaResult" class="cert-result"></div>
-                  </div>
-                </details>
-
+                <div id="ndesBarStatus" class="ise-inline-status"></div>
+                <div id="ndesConfigResult" class="cert-result"></div>
               </div>
             </div>
+
           </div>
         </div>
 
@@ -359,41 +311,6 @@
                 </div>
                 <div id="iseBarStatus" class="ise-inline-status"></div>
                 <div id="iseStatus" class="cert-result"></div>
-              </div>
-            </div>
-
-            <!-- NDES / SCEP Configuration -->
-            <div class="integ-item" id="ndesIntegItem">
-              <button class="integ-item-header" onclick="toggleIntegration('ndes')">
-                <div class="integ-item-left">
-                  <span class="integ-item-icon integ-item-icon-text">&#128275;</span>
-                  <span class="integ-item-label">NDES / SCEP Configuration</span>
-                </div>
-                <span class="integ-chevron" id="ndesChevron">&#9660;</span>
-              </button>
-              <div class="integ-item-body" id="ndesBody" style="display:none">
-                <p class="cert-form-desc">Save your NDES server URL as a global setting. The SCEP enrollment form will be pre-filled automatically. CN and SAN are specified <strong>per endpoint</strong> at enrollment time — not here.</p>
-                <div class="ise-panel-grid">
-                  <div class="form-group">
-                    <label class="form-label cert-field-label">NDES URL</label>
-                    <input type="text" class="form-input" id="ndesConfigUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
-                    <span class="form-hint">Saved globally — pre-fills the SCEP enrollment form and endpoint cert requests</span>
-                  </div>
-                  <div class="form-group">
-                    <label class="form-label cert-field-label">Default Challenge Password <span class="form-hint-inline">(optional)</span></label>
-                    <div class="password-wrapper">
-                      <input type="password" class="form-input" id="ndesConfigChallenge" placeholder="Leave blank if not required">
-                      <button type="button" class="password-toggle" onclick="togglePasswordVis('ndesConfigChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
-                    </div>
-                    <span class="form-hint">Static lab challenges can be saved here. Real NDES OTPs expire in minutes — enter those at enrollment time.</span>
-                  </div>
-                </div>
-                <div class="ise-panel-actions">
-                  <button class="btn btn-save" onclick="saveNDESConfig()">Save Settings</button>
-                  <button class="btn btn-section-connect" onclick="testNDESConfig()">Test NDES</button>
-                </div>
-                <div id="ndesBarStatus" class="ise-inline-status"></div>
-                <div id="ndesConfigResult" class="cert-result"></div>
               </div>
             </div>
 

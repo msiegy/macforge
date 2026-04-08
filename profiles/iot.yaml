@@ -60,6 +60,8 @@
     friendly_name: "Samsung Smart TV"
   traffic_interval_sec: 30
 
+# Crestron TouchScreen — ISE host-name STARTSWITH "tscw-" (Rule5) or "tsw-" (Rule2)
+# Using "tscw-" prefix for C-series panel compatibility with both rules
 - name: "Crestron TouchScreen"
   mac: "C4:42:68:AB:0D:01"
   personality:
@@ -67,13 +69,14 @@
     os: "Crestron OS"
     device_type: "Crestron TouchScreen"
   dhcp:
-    hostname: "tscw-device"
+    hostname: "tscw-MACforge"
     vendor_class: ""
     client_id: "mac"
     options_order: [53, 61, 12, 55]
     param_request_list: [1, 3, 6, 15, 12]
   traffic_interval_sec: 30
 
+# Crestron DMP/Audio Processor — ISE host-name CONTAINS "DSP"
 - name: "Crestron DMP"
   mac: "C4:42:68:AB:0E:01"
   personality:
@@ -81,9 +84,53 @@
     os: "Crestron OS"
     device_type: "Crestron DMP"
   dhcp:
-    hostname: "dmps-device"
+    hostname: "DSP-MACforge"
     vendor_class: ""
     client_id: "mac"
     options_order: [53, 61, 12, 55]
     param_request_list: [1, 3, 6, 15, 12]
+  traffic_interval_sec: 30
+
+# Axis P3375 Network Camera — ISE dhcp-class-identifier "P3375"
+- name: "Axis P3375 Camera"
+  mac: "00:40:8C:AB:21:01"
+  personality:
+    category: "iot"
+    os: "Axis ARTPEC OS"
+    device_type: "Axis network camera"
+  dhcp:
+    hostname: "AXIS-P3375-MF"
+    vendor_class: "P3375"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 3, 6, 12, 15, 28]
+  snmp:
+    sys_descr: "AXIS P3375-V Fixed Dome Camera, 9.80.1.1"
+    sys_object_id: "1.3.6.1.4.1.368.1.1.2"
+    sys_name: "AXIS-P3375-MF"
+    sys_contact: ""
+    sys_location: ""
+    hr_device_descr: "AXIS P3375-V Fixed Dome Camera"
+  traffic_interval_sec: 30
+
+# Axis M3045 Network Camera — ISE dhcp-class-identifier "M3045"
+- name: "Axis M3045 Camera"
+  mac: "00:40:8C:AB:22:01"
+  personality:
+    category: "iot"
+    os: "Axis ARTPEC OS"
+    device_type: "Axis network camera"
+  dhcp:
+    hostname: "AXIS-M3045-MF"
+    vendor_class: "M3045"
+    client_id: "mac"
+    options_order: [53, 61, 12, 60, 55]
+    param_request_list: [1, 3, 6, 12, 15, 28]
+  snmp:
+    sys_descr: "AXIS M3045-V Mini Dome Camera, 9.80.1.1"
+    sys_object_id: "1.3.6.1.4.1.368.1.1.2"
+    sys_name: "AXIS-M3045-MF"
+    sys_contact: ""
+    sys_location: ""
+    hr_device_descr: "AXIS M3045-V Mini Dome Camera"
   traffic_interval_sec: 30

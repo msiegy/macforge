@@ -98,6 +98,8 @@ VENDOR_OUIS: dict[str, list[dict[str, str]]] = {
         {"vendor": "Lexmark",   "oui": "00:04:00"},
         {"vendor": "Canon",     "oui": "18:0C:AC"},
         {"vendor": "Epson",     "oui": "00:26:AB"},
+        {"vendor": "Dell",      "oui": "18:03:73"},
+        {"vendor": "Zebra",     "oui": "AC:3F:A4"},
     ],
     "iot": [
         {"vendor": "Amazon",    "oui": "34:D2:70"},
@@ -107,6 +109,7 @@ VENDOR_OUIS: dict[str, list[dict[str, str]]] = {
         {"vendor": "Cisco",     "oui": "00:1B:54"},
         {"vendor": "Sonos",     "oui": "5C:AA:FD"},
         {"vendor": "Ring",      "oui": "34:D2:70"},
+        {"vendor": "Axis",      "oui": "00:40:8C"},
     ],
     "gaming": [
         {"vendor": "Nintendo",  "oui": "7C:BB:8A"},

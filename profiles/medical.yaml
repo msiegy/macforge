@@ -25,3 +25,33 @@
     options_order: [53, 61, 55]
     param_request_list: [1, 3, 6]
   traffic_interval_sec: 30
+
+# Armorlink CE Anesthesia — ISE host-name STARTSWITH "ce-anes"
+- name: "Armorlink CE Anesthesia"
+  mac: "00:09:E8:AB:13:01"
+  personality:
+    category: "medical"
+    os: "Embedded Linux"
+    device_type: "Armorlink anesthesia device"
+  dhcp:
+    hostname: "ce-anes-MF01"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 3, 6, 15, 12, 28]
+  traffic_interval_sec: 30
+
+# Armorlink CE Dialysis — ISE host-name STARTSWITH "ce-dialysis"
+- name: "Armorlink CE Dialysis"
+  mac: "00:09:E8:AB:14:01"
+  personality:
+    category: "medical"
+    os: "Embedded Linux"
+    device_type: "Armorlink dialysis device"
+  dhcp:
+    hostname: "ce-dialysis-MF01"
+    vendor_class: ""
+    client_id: "mac"
+    options_order: [53, 61, 12, 55]
+    param_request_list: [1, 3, 6, 15, 12, 28]
+  traffic_interval_sec: 30

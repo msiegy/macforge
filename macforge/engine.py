@@ -368,6 +368,8 @@ SYSTEM_OIDS = {
     "1.3.6.1.2.1.1.4.0": "sys_contact",
     "1.3.6.1.2.1.1.5.0": "sys_name",
     "1.3.6.1.2.1.1.6.0": "sys_location",
+    # Host Resources MIB — ISE SNMP probe checks this for device identification
+    "1.3.6.1.2.1.25.3.2.1.3.1": "hr_device_descr",
 }
 
 GETNEXT_ORDER = [
@@ -377,6 +379,7 @@ GETNEXT_ORDER = [
     "1.3.6.1.2.1.1.4.0",
     "1.3.6.1.2.1.1.5.0",
     "1.3.6.1.2.1.1.6.0",
+    "1.3.6.1.2.1.25.3.2.1.3.1",
 ]
 
 
@@ -395,6 +398,8 @@ def _oid_value(oid_str: str, snmp_profile: SNMPProfile, uptime_ticks: int):
         return ASN1_STRING(snmp_profile.sys_name)
     if field == "sys_location":
         return ASN1_STRING(snmp_profile.sys_location)
+    if field == "hr_device_descr" and snmp_profile.hr_device_descr:
+        return ASN1_STRING(snmp_profile.hr_device_descr)
     return None
 
 

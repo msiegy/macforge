@@ -28,6 +28,7 @@ let detailCaptureActive = false;        // Packets tab capture toggle
 let detailAuthFlowRendered = false;     // true once auth flow is rendered in terminal state
 
 let iseConfigured = false;              // true when ISE hostname has been saved
+let ndesConfigCache = { ndes_url: "", challenge_saved: false }; // populated by loadNDESConfig
 
 
 const FETCH_TIMEOUT_MS = 6000;  // abort fetch if server doesn't respond in 6s
@@ -1780,12 +1781,12 @@ function renderCertSourcePanel(prefix, auth, isFullDrawer, opts = {}) {
       html += `
         <div class="form-group">
           <label class="form-label">NDES URL</label>
-          <input type="text" class="form-input" id="${prefix}ScepUrl" placeholder="http://ndes-server/certsrv/mscep/mscep.dll">
+          <input type="text" class="form-input" id="${prefix}ScepUrl" value="${escapeHtml(ndesConfigCache.ndes_url)}" placeholder="http://ndes-server/certsrv/mscep/mscep.dll">
         </div>
         <div class="form-group">
-          <label class="form-label">Challenge Password</label>
+          <label class="form-label">Challenge Password${ndesConfigCache.challenge_saved ? ' <span class="form-hint-inline">(saved — enter a new OTP to override)</span>' : ''}</label>
           <div class="password-wrapper">
-            <input type="password" class="form-input" id="${prefix}ScepChallenge" placeholder="NDES challenge password">
+            <input type="password" class="form-input" id="${prefix}ScepChallenge" placeholder="${ndesConfigCache.challenge_saved ? 'Leave blank to use saved challenge' : 'NDES challenge password'}">
             <button type="button" class="password-toggle" onclick="togglePasswordVis('${prefix}ScepChallenge')">${EYE_ICON_SVG}</button>
           </div>
         </div>
@@ -2368,6 +2369,8 @@ async function loadEnrollmentCaps() {
 async function loadNDESConfig() {
   try {
     const data = await fetchJSON("/api/pki/ndes-config");
+    ndesConfigCache = { ndes_url: data.ndes_url || "", challenge_saved: !!data.challenge_saved };
+
     const urlEl = document.getElementById("ndesConfigUrl");
     if (urlEl && data.ndes_url) urlEl.value = data.ndes_url;
 
@@ -2376,12 +2379,6 @@ async function loadNDESConfig() {
       barStatusEl.textContent = data.ndes_url
         ? `Configured: ${data.ndes_url}${data.challenge_saved ? " · challenge saved" : ""}`
         : "";
-    }
-
-    // Pre-fill the enrollment form fields only when they are currently empty
-    if (data.ndes_url) {
-      const scepUrlEl = document.getElementById("scepUrl");
-      if (scepUrlEl && !scepUrlEl.value) scepUrlEl.value = data.ndes_url;
     }
   } catch (_) {}
 }
@@ -2417,47 +2414,6 @@ async function testNDESConfig() {
   } catch (err) {
     if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">&#10007; ${escapeHtml(err.message)}</div>`;
     showToast("NDES test failed: " + err.message, "error");
-  }
-}
-
-async function testNDES() {
-  const url = document.getElementById("scepUrl")?.value.trim();
-  if (!url) { showToast("Enter an NDES URL first.", "error"); return; }
-  const resultEl = document.getElementById("scepResult");
-  if (resultEl) resultEl.innerHTML = '<div class="pki-status-loading">Testing NDES…</div>';
-  try {
-    const data = await fetchJSON("/api/pki/test-ndes", {
-      method: "POST",
-      body: JSON.stringify({ ndes_url: url }),
-    });
-    if (resultEl) resultEl.innerHTML = `<div class="pki-result-ok">✅ NDES reachable &mdash; ${escapeHtml(data.message)}</div>`;
-    showToast("NDES reachable", "success");
-  } catch (err) {
-    if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">❌ ${escapeHtml(err.message)}</div>`;
-    showToast("NDES test failed: " + err.message, "error");
-  }
-}
-
-async function enrollSCEP() {
-  const resultEl = document.getElementById("scepResult");
-  const url = document.getElementById("scepUrl")?.value.trim();
-  const challenge = document.getElementById("scepChallenge")?.value;
-  const cn = document.getElementById("scepCN")?.value.trim();
-  const san = document.getElementById("scepSAN")?.value.trim() || null;
-  if (!url || !cn) { showToast("NDES URL and CN are required.", "error"); return; }
-  if (resultEl) resultEl.innerHTML = '<div class="pki-status-loading">Enrolling via SCEP…</div>';
-  showToast("SCEP enrollment in progress...", "info");
-  try {
-    const data = await fetchJSON("/api/pki/enroll-scep", {
-      method: "POST",
-      body: JSON.stringify({ ndes_url: url, challenge: challenge || "", cn, san }),
-    });
-    showToast("SCEP enrollment successful", "success");
-    if (resultEl) resultEl.innerHTML = `<div class="pki-result-ok">${escapeHtml(data.message)}<br>Cert: <strong>${escapeHtml(data.cert_file)}</strong></div>`;
-    await refreshCertTable();
-  } catch (err) {
-    showToast("SCEP enrollment failed: " + err.message, "error");
-    if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">${escapeHtml(err.message)}</div>`;
   }
 }
 

@@ -50,6 +50,9 @@ class SNMPProfile(BaseModel):
     sys_name: str = ""
     sys_contact: str = ""
     sys_location: str = ""
+    # Host Resources MIB — OID 1.3.6.1.2.1.25.3.2.1.3.1
+    # ISE SNMP probe checks hrDeviceDescr for detailed device identification
+    hr_device_descr: str = ""
 
 
 class AuthProfile(BaseModel):

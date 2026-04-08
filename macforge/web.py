@@ -923,16 +923,20 @@ async def api_enroll_step_ca(payload: StepCAEnrollPayload):
 
 class SCEPEnrollPayload(BaseModel):
     ndes_url: str
-    challenge: str
+    challenge: str = ""
     cn: str
     san: Optional[str] = None
 
 
 @app.post("/api/pki/enroll-scep")
 async def api_enroll_scep(payload: SCEPEnrollPayload):
+    challenge = payload.challenge
+    if not challenge:
+        saved = load_ndes_config()
+        challenge = saved.challenge
     result = await enroll_via_scep(
         ndes_url=payload.ndes_url,
-        challenge=payload.challenge,
+        challenge=challenge,
         cn=payload.cn,
         san=payload.san,
     )
