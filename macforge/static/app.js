@@ -2365,6 +2365,61 @@ async function loadEnrollmentCaps() {
   }
 }
 
+async function loadNDESConfig() {
+  try {
+    const data = await fetchJSON("/api/pki/ndes-config");
+    const urlEl = document.getElementById("ndesConfigUrl");
+    if (urlEl && data.ndes_url) urlEl.value = data.ndes_url;
+
+    const barStatusEl = document.getElementById("ndesBarStatus");
+    if (barStatusEl) {
+      barStatusEl.textContent = data.ndes_url
+        ? `Configured: ${data.ndes_url}${data.challenge_saved ? " · challenge saved" : ""}`
+        : "";
+    }
+
+    // Pre-fill the enrollment form fields only when they are currently empty
+    if (data.ndes_url) {
+      const scepUrlEl = document.getElementById("scepUrl");
+      if (scepUrlEl && !scepUrlEl.value) scepUrlEl.value = data.ndes_url;
+    }
+  } catch (_) {}
+}
+
+async function saveNDESConfig() {
+  const url = document.getElementById("ndesConfigUrl")?.value.trim();
+  const challenge = document.getElementById("ndesConfigChallenge")?.value || "";
+  try {
+    await fetchJSON("/api/pki/ndes-config", {
+      method: "PUT",
+      body: JSON.stringify({ ndes_url: url, challenge }),
+    });
+    showToast("NDES settings saved", "success");
+    document.getElementById("ndesConfigChallenge").value = "";  // clear after save
+    await loadNDESConfig();
+  } catch (err) {
+    showToast("Failed to save NDES config: " + err.message, "error");
+  }
+}
+
+async function testNDESConfig() {
+  const url = document.getElementById("ndesConfigUrl")?.value.trim();
+  if (!url) { showToast("Enter an NDES URL first.", "error"); return; }
+  const resultEl = document.getElementById("ndesConfigResult");
+  if (resultEl) resultEl.innerHTML = '<div class="pki-status-loading">Testing NDES…</div>';
+  try {
+    const data = await fetchJSON("/api/pki/test-ndes", {
+      method: "POST",
+      body: JSON.stringify({ ndes_url: url }),
+    });
+    if (resultEl) resultEl.innerHTML = `<div class="pki-result-ok">&#10003; NDES reachable &mdash; ${escapeHtml(data.message)}</div>`;
+    showToast("NDES reachable", "success");
+  } catch (err) {
+    if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">&#10007; ${escapeHtml(err.message)}</div>`;
+    showToast("NDES test failed: " + err.message, "error");
+  }
+}
+
 async function testNDES() {
   const url = document.getElementById("scepUrl")?.value.trim();
   if (!url) { showToast("Enter an NDES URL first.", "error"); return; }
@@ -4056,6 +4111,7 @@ function _renderNadResult(r) {
 loadInterface();
 loadSettings();
 loadISEConfig();
+loadNDESConfig();
 loadDot1xReadiness();
 loadNadConfig();
 refreshCertTable();

@@ -244,7 +244,7 @@
                   <div class="form-group">
                     <label class="form-label cert-field-label">NDES URL</label>
                     <input type="text" class="form-input" id="scepUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
-                    <span class="form-hint">The NDES SCEP endpoint on your AD CS server</span>
+                    <span class="form-hint">Pre-filled from saved NDES configuration. Override here for a one-off enrollment.</span>
                   </div>
                   <div class="form-group">
                     <label class="form-label cert-field-label">Challenge Password</label>
@@ -252,7 +252,7 @@
                       <input type="password" class="form-input" id="scepChallenge" placeholder="One-time password from NDES">
                       <button type="button" class="password-toggle" onclick="togglePasswordVis('scepChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
                     </div>
-                    <span class="form-hint">Obtained from NDES web page or via admin. Leave blank if your NDES is configured without challenge.</span>
+                    <span class="form-hint">Pre-filled from saved default if set. Override with a one-time password as needed.</span>
                   </div>
                   <div class="form-group">
                     <label class="form-label cert-field-label">Common Name (CN)</label>
@@ -361,6 +361,42 @@
                 <div id="iseStatus" class="cert-result"></div>
               </div>
             </div>
+
+            <!-- NDES / SCEP Configuration -->
+            <div class="integ-item" id="ndesIntegItem">
+              <button class="integ-item-header" onclick="toggleIntegration('ndes')">
+                <div class="integ-item-left">
+                  <span class="integ-item-icon integ-item-icon-text">&#128275;</span>
+                  <span class="integ-item-label">NDES / SCEP Configuration</span>
+                </div>
+                <span class="integ-chevron" id="ndesChevron">&#9660;</span>
+              </button>
+              <div class="integ-item-body" id="ndesBody" style="display:none">
+                <p class="cert-form-desc">Save your NDES server URL as a global setting. The SCEP enrollment form will be pre-filled automatically. CN and SAN are specified <strong>per endpoint</strong> at enrollment time — not here.</p>
+                <div class="ise-panel-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">NDES URL</label>
+                    <input type="text" class="form-input" id="ndesConfigUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
+                    <span class="form-hint">Saved globally — pre-fills the SCEP enrollment form and endpoint cert requests</span>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Default Challenge Password <span class="form-hint-inline">(optional)</span></label>
+                    <div class="password-wrapper">
+                      <input type="password" class="form-input" id="ndesConfigChallenge" placeholder="Leave blank if not required">
+                      <button type="button" class="password-toggle" onclick="togglePasswordVis('ndesConfigChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    </div>
+                    <span class="form-hint">Static lab challenges can be saved here. Real NDES OTPs expire in minutes — enter those at enrollment time.</span>
+                  </div>
+                </div>
+                <div class="ise-panel-actions">
+                  <button class="btn btn-save" onclick="saveNDESConfig()">Save Settings</button>
+                  <button class="btn btn-section-connect" onclick="testNDESConfig()">Test NDES</button>
+                </div>
+                <div id="ndesBarStatus" class="ise-inline-status"></div>
+                <div id="ndesConfigResult" class="cert-result"></div>
+              </div>
+            </div>
+
           </div>
         </div>
 

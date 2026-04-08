@@ -31,6 +31,9 @@ from macforge.dot1x import (
 from macforge.ise_api import (
     ISEConfig,
     load_ise_config,
+    NDESConfig,
+    load_ndes_config,
+    save_ndes_config,
     push_trusted_cert,
     save_ise_config,
     test_connection as ise_test_connection,
@@ -840,6 +843,33 @@ async def api_ise_push_ca(payload: ISEPushCAPayload):
 @app.get("/api/pki/enrollment-capabilities")
 async def api_enrollment_caps():
     return get_enrollment_capabilities()
+
+
+# ─── NDES / SCEP global configuration ────────────────────────────────
+
+@app.get("/api/pki/ndes-config")
+async def get_ndes_config():
+    cfg = load_ndes_config()
+    return {
+        "ndes_url": cfg.ndes_url,
+        "challenge_saved": bool(cfg.challenge),
+    }
+
+
+class NDESConfigPayload(BaseModel):
+    ndes_url: str = ""
+    challenge: str = ""
+
+
+@app.put("/api/pki/ndes-config")
+async def update_ndes_config(payload: NDESConfigPayload):
+    existing = load_ndes_config()
+    # Keep the stored challenge if the client sent a blank value (field was left empty)
+    challenge = payload.challenge if payload.challenge else existing.challenge
+    cfg = NDESConfig(ndes_url=payload.ndes_url.strip(), challenge=challenge)
+    save_ndes_config(cfg)
+    return {"status": "saved", "ndes_url": cfg.ndes_url}
+
 
 class TestNDESPayload(BaseModel):
     ndes_url: str

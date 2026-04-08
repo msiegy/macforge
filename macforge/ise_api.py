@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(os.environ.get("MACFORGE_DATA_DIR", "/app/data"))
 CERTS_DIR = DATA_DIR / "certs"
 ISE_CONFIG_PATH = DATA_DIR / "ise_config.json"
+NDES_CONFIG_PATH = DATA_DIR / "ndes_config.json"
 
 
 class ISEConfig(BaseModel):
@@ -48,6 +49,27 @@ def save_ise_config(config: ISEConfig) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     ISE_CONFIG_PATH.write_text(config.model_dump_json(indent=2))
     logger.info("Saved ISE config for %s", config.hostname)
+
+
+class NDESConfig(BaseModel):
+    ndes_url: str = ""
+    challenge: str = ""
+
+
+def load_ndes_config() -> NDESConfig:
+    if NDES_CONFIG_PATH.exists():
+        try:
+            data = json.loads(NDES_CONFIG_PATH.read_text())
+            return NDESConfig(**data)
+        except Exception:
+            logger.exception("Failed to load NDES config")
+    return NDESConfig()
+
+
+def save_ndes_config(config: NDESConfig) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    NDES_CONFIG_PATH.write_text(config.model_dump_json(indent=2))
+    logger.info("Saved NDES config for %s", config.ndes_url)
 
 
 def _make_ssl_context(verify: bool) -> ssl.SSLContext:
