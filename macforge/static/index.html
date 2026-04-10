@@ -235,25 +235,63 @@
             <!-- NDES Setup tab -->
             <div class="cert-tab-pane" id="certtab-ndes">
               <div class="cert-tab-body">
-                <p class="cert-form-desc">Save your NDES server URL and challenge as global settings. CN and SAN are specified <strong>per endpoint</strong> at enrollment time in the device drawer.</p>
-                <div class="ise-panel-grid">
-                  <div class="form-group">
-                    <label class="form-label cert-field-label">NDES URL</label>
-                    <input type="text" class="form-input" id="ndesConfigUrl" placeholder="http://ndes.corp.com/certsrv/mscep/mscep.dll">
-                    <span class="form-hint">Saved globally — pre-fills the SCEP enrollment form in the endpoint drawer</span>
+                <p class="cert-form-desc">Configure global NDES / SCEP settings. CN and SAN are specified <strong>per endpoint</strong> at enrollment time in the device drawer.</p>
+
+                <!-- NDES URL (always visible) -->
+                <div class="form-group">
+                  <label class="form-label cert-field-label">NDES URL</label>
+                  <input type="text" class="form-input" id="ndesConfigUrl" placeholder="https://ndes.corp.com/certsrv/mscep/mscep.dll">
+                  <span class="form-hint">Saved globally — pre-fills the SCEP enrollment form in the endpoint drawer</span>
+                </div>
+
+                <!-- OTP Mode toggle -->
+                <div class="form-group">
+                  <label class="form-label cert-field-label">OTP Mode</label>
+                  <div class="radio-group">
+                    <label class="radio-option"><input type="radio" name="ndesOtpMode" id="ndesModeStatic" value="static" onchange="switchNdesMode('static')" checked> Static OTP</label>
+                    <label class="radio-option"><input type="radio" name="ndesOtpMode" id="ndesModeDynamic" value="dynamic" onchange="switchNdesMode('dynamic')"> Dynamic OTP (Auto-fetch via NTLM)</label>
                   </div>
+                </div>
+
+                <!-- Static OTP section -->
+                <div id="ndesStaticSection">
                   <div class="form-group">
-                    <label class="form-label cert-field-label">Default Challenge Password <span class="form-hint-inline">(optional)</span></label>
+                    <label class="form-label cert-field-label">Challenge Password <span class="form-hint-inline">(optional)</span></label>
                     <div class="password-wrapper">
                       <input type="password" class="form-input" id="ndesConfigChallenge" placeholder="Leave blank if not required">
                       <button type="button" class="password-toggle" onclick="togglePasswordVis('ndesConfigChallenge')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
                     </div>
-                    <span class="form-hint">Static lab challenges can be saved here. Real NDES OTPs expire in minutes — enter those at enrollment time in the drawer.</span>
+                    <span class="form-hint">Encrypted at rest. Real NDES OTPs expire in minutes — enter those at enrollment time in the endpoint drawer.</span>
                   </div>
                 </div>
+
+                <!-- Dynamic OTP section -->
+                <div id="ndesDynamicSection" style="display:none">
+                  <div class="ise-panel-grid">
+                    <div class="form-group">
+                      <label class="form-label cert-field-label">NTLM Username</label>
+                      <input type="text" class="form-input" id="ndesNtlmUser" placeholder="DOMAIN\username or user@domain.com">
+                      <span class="form-hint">Account with permission to request certificates on the NDES server</span>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label cert-field-label">NTLM Password <span class="form-hint-inline" title="Encrypted with AES-128 in the container data volume. Lab use only — do not use production credentials.">&#9432; lab use only</span></label>
+                      <div class="password-wrapper">
+                        <input type="password" class="form-input" id="ndesNtlmPassword" placeholder="AD account password">
+                        <button type="button" class="password-toggle" onclick="togglePasswordVis('ndesNtlmPassword')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                      </div>
+                      <span class="form-hint">Encrypted at rest (AES-128 / Fernet). Do not use production credentials — this tool is for isolated lab networks only.</span>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">CA Fingerprint <span class="form-hint-inline">(optional — SHA-256 of NDES root CA)</span></label>
+                    <input type="text" class="form-input" id="ndesCaFingerprint" placeholder="e.g. AA:BB:CC:DD:… or aabbccdd…">
+                    <span class="form-hint">When set, the CA cert retrieved during enrollment is verified against this fingerprint before proceeding.</span>
+                  </div>
+                </div>
+
                 <div class="ise-panel-actions">
                   <button class="btn btn-save" onclick="saveNDESConfig()">Save Settings</button>
-                  <button class="btn btn-section-connect" onclick="testNDESConfig()">Test NDES</button>
+                  <button class="btn btn-section-connect" id="ndesTestBtn" onclick="testNDESConfig()">Test NDES</button>
                 </div>
                 <div id="ndesBarStatus" class="ise-inline-status"></div>
                 <div id="ndesConfigResult" class="cert-result"></div>

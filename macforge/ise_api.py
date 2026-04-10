@@ -20,6 +20,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from macforge.crypto_store import decrypt_secret, encrypt_secret
+
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(os.environ.get("MACFORGE_DATA_DIR", "/app/data"))
@@ -53,23 +55,36 @@ def save_ise_config(config: ISEConfig) -> None:
 
 class NDESConfig(BaseModel):
     ndes_url: str = ""
-    challenge: str = ""
+    otp_mode: str = "static"       # "static" | "dynamic"
+    challenge: str = ""            # plaintext in memory; encrypted on disk
+    ntlm_user: str = ""
+    ntlm_password: str = ""        # plaintext in memory; encrypted on disk
+    ca_fingerprint: str = ""       # optional SHA-256 hex of NDES root CA
 
 
 def load_ndes_config() -> NDESConfig:
+    """Load and decrypt NDES config from disk."""
     if NDES_CONFIG_PATH.exists():
         try:
             data = json.loads(NDES_CONFIG_PATH.read_text())
-            return NDESConfig(**data)
+            cfg = NDESConfig(**data)
+            # Decrypt secrets — handles legacy plaintext transparently
+            cfg.challenge = decrypt_secret(cfg.challenge)
+            cfg.ntlm_password = decrypt_secret(cfg.ntlm_password)
+            return cfg
         except Exception:
             logger.exception("Failed to load NDES config")
     return NDESConfig()
 
 
 def save_ndes_config(config: NDESConfig) -> None:
+    """Encrypt secrets and write NDES config to disk."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    NDES_CONFIG_PATH.write_text(config.model_dump_json(indent=2))
-    logger.info("Saved NDES config for %s", config.ndes_url)
+    on_disk = config.model_copy()
+    on_disk.challenge = encrypt_secret(config.challenge)
+    on_disk.ntlm_password = encrypt_secret(config.ntlm_password)
+    NDES_CONFIG_PATH.write_text(on_disk.model_dump_json(indent=2))
+    logger.info("Saved NDES config for %s (mode=%s)", config.ndes_url, config.otp_mode)
 
 
 def _make_ssl_context(verify: bool) -> ssl.SSLContext:

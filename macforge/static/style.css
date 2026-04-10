@@ -1647,6 +1647,28 @@ details[open] .stepca-summary::before { content: "▼  "; }
   margin-bottom: 4px;
 }
 
+.radio-group {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.radio-option input[type="radio"] {
+  accent-color: var(--accent, #0e7cef);
+  cursor: pointer;
+}
+
 .form-input,
 .form-select {
   width: 100%;

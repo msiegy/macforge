@@ -28,7 +28,7 @@ let detailCaptureActive = false;        // Packets tab capture toggle
 let detailAuthFlowRendered = false;     // true once auth flow is rendered in terminal state
 
 let iseConfigured = false;              // true when ISE hostname has been saved
-let ndesConfigCache = { ndes_url: "", challenge_saved: false }; // populated by loadNDESConfig
+let ndesConfigCache = { ndes_url: "", challenge_saved: false, otp_mode: "static", ntlm_password_saved: false }; // populated by loadNDESConfig
 
 
 const FETCH_TIMEOUT_MS = 6000;  // abort fetch if server doesn't respond in 6s
@@ -1781,15 +1781,18 @@ function renderCertSourcePanel(prefix, auth, isFullDrawer, opts = {}) {
       html += `
         <div class="form-group">
           <label class="form-label">NDES URL</label>
-          <input type="text" class="form-input" id="${prefix}ScepUrl" value="${escapeHtml(ndesConfigCache.ndes_url)}" placeholder="http://ndes-server/certsrv/mscep/mscep.dll">
+          <input type="text" class="form-input" id="${prefix}ScepUrl" value="${escapeHtml(ndesConfigCache.ndes_url)}" placeholder="https://ndes-server/certsrv/mscep/mscep.dll">
         </div>
-        <div class="form-group">
+        ${ndesConfigCache.otp_mode === "dynamic"
+          ? `<div class="pki-status-loading" style="margin-bottom:8px">&#9889; Dynamic OTP — password will be fetched automatically via NTLM at enrollment time.</div>`
+          : `<div class="form-group">
           <label class="form-label">Challenge Password${ndesConfigCache.challenge_saved ? ' <span class="form-hint-inline">(saved — enter a new OTP to override)</span>' : ''}</label>
           <div class="password-wrapper">
             <input type="password" class="form-input" id="${prefix}ScepChallenge" placeholder="${ndesConfigCache.challenge_saved ? 'Leave blank to use saved challenge' : 'NDES challenge password'}">
             <button type="button" class="password-toggle" onclick="togglePasswordVis('${prefix}ScepChallenge')">${EYE_ICON_SVG}</button>
           </div>
-        </div>
+        </div>`
+        }
         <div class="form-group">
           <label class="form-label">Common Name (CN)</label>
           <input type="text" class="form-input" id="${prefix}ScepCN" value="${escapeHtml(defaultCN)}" placeholder="user@corp.local">
@@ -2366,33 +2369,87 @@ async function loadEnrollmentCaps() {
   }
 }
 
+function switchNdesMode(mode) {
+  const staticSec = document.getElementById("ndesStaticSection");
+  const dynamicSec = document.getElementById("ndesDynamicSection");
+  const testBtn = document.getElementById("ndesTestBtn");
+  if (staticSec)  staticSec.style.display  = mode === "static"  ? "" : "none";
+  if (dynamicSec) dynamicSec.style.display = mode === "dynamic" ? "" : "none";
+  if (testBtn) testBtn.textContent = mode === "dynamic" ? "Test NTLM + OTP" : "Test NDES";
+}
+
 async function loadNDESConfig() {
   try {
     const data = await fetchJSON("/api/pki/ndes-config");
-    ndesConfigCache = { ndes_url: data.ndes_url || "", challenge_saved: !!data.challenge_saved };
+    ndesConfigCache = {
+      ndes_url: data.ndes_url || "",
+      challenge_saved: !!data.challenge_saved,
+      otp_mode: data.otp_mode || "static",
+      ntlm_password_saved: !!data.ntlm_password_saved,
+    };
 
     const urlEl = document.getElementById("ndesConfigUrl");
     if (urlEl && data.ndes_url) urlEl.value = data.ndes_url;
 
+    // Restore mode radio
+    const modeStatic  = document.getElementById("ndesModeStatic");
+    const modeDynamic = document.getElementById("ndesModeDynamic");
+    if (modeStatic && modeDynamic) {
+      if (data.otp_mode === "dynamic") {
+        modeDynamic.checked = true;
+        switchNdesMode("dynamic");
+      } else {
+        modeStatic.checked = true;
+        switchNdesMode("static");
+      }
+    }
+
+    // Restore NTLM username (not password — never sent back from API)
+    const ntlmUserEl = document.getElementById("ndesNtlmUser");
+    if (ntlmUserEl && data.ntlm_user) ntlmUserEl.value = data.ntlm_user;
+
+    // Restore CA fingerprint
+    const fpEl = document.getElementById("ndesCaFingerprint");
+    if (fpEl && data.ca_fingerprint) fpEl.value = data.ca_fingerprint;
+
     const barStatusEl = document.getElementById("ndesBarStatus");
-    if (barStatusEl) {
-      barStatusEl.textContent = data.ndes_url
-        ? `Configured: ${data.ndes_url}${data.challenge_saved ? " · challenge saved" : ""}`
-        : "";
+    if (barStatusEl && data.ndes_url) {
+      let hint = `Configured: ${data.ndes_url}`;
+      if (data.otp_mode === "dynamic") {
+        hint += data.ntlm_password_saved ? " · Dynamic OTP (NTLM saved)" : " · Dynamic OTP (no creds)";
+      } else {
+        hint += data.challenge_saved ? " · static challenge saved" : "";
+      }
+      barStatusEl.textContent = hint;
     }
   } catch (_) {}
 }
 
 async function saveNDESConfig() {
-  const url = document.getElementById("ndesConfigUrl")?.value.trim();
+  const url       = document.getElementById("ndesConfigUrl")?.value.trim();
+  const mode      = document.querySelector('input[name="ndesOtpMode"]:checked')?.value || "static";
   const challenge = document.getElementById("ndesConfigChallenge")?.value || "";
+  const ntlmUser  = document.getElementById("ndesNtlmUser")?.value.trim() || "";
+  const ntlmPass  = document.getElementById("ndesNtlmPassword")?.value || "";
+  const caFp      = document.getElementById("ndesCaFingerprint")?.value.trim() || "";
   try {
     await fetchJSON("/api/pki/ndes-config", {
       method: "PUT",
-      body: JSON.stringify({ ndes_url: url, challenge }),
+      body: JSON.stringify({
+        ndes_url: url,
+        otp_mode: mode,
+        challenge,
+        ntlm_user: ntlmUser,
+        ntlm_password: ntlmPass,
+        ca_fingerprint: caFp,
+      }),
     });
     showToast("NDES settings saved", "success");
-    document.getElementById("ndesConfigChallenge").value = "";  // clear after save
+    // Clear password fields after save — they are now stored encrypted
+    const chalEl = document.getElementById("ndesConfigChallenge");
+    if (chalEl) chalEl.value = "";
+    const passEl = document.getElementById("ndesNtlmPassword");
+    if (passEl) passEl.value = "";
     await loadNDESConfig();
   } catch (err) {
     showToast("Failed to save NDES config: " + err.message, "error");
@@ -2400,20 +2457,42 @@ async function saveNDESConfig() {
 }
 
 async function testNDESConfig() {
-  const url = document.getElementById("ndesConfigUrl")?.value.trim();
+  const url  = document.getElementById("ndesConfigUrl")?.value.trim();
   if (!url) { showToast("Enter an NDES URL first.", "error"); return; }
+  const mode = document.querySelector('input[name="ndesOtpMode"]:checked')?.value || "static";
   const resultEl = document.getElementById("ndesConfigResult");
-  if (resultEl) resultEl.innerHTML = '<div class="pki-status-loading">Testing NDES…</div>';
-  try {
-    const data = await fetchJSON("/api/pki/test-ndes", {
-      method: "POST",
-      body: JSON.stringify({ ndes_url: url }),
-    });
-    if (resultEl) resultEl.innerHTML = `<div class="pki-result-ok">&#10003; NDES reachable &mdash; ${escapeHtml(data.message)}</div>`;
-    showToast("NDES reachable", "success");
-  } catch (err) {
-    if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">&#10007; ${escapeHtml(err.message)}</div>`;
-    showToast("NDES test failed: " + err.message, "error");
+
+  if (mode === "dynamic") {
+    // Test NTLM auth + OTP fetch
+    const ntlmUser = document.getElementById("ndesNtlmUser")?.value.trim() || "";
+    const ntlmPass = document.getElementById("ndesNtlmPassword")?.value || "";
+    if (!ntlmUser) { showToast("Enter an NTLM username first.", "error"); return; }
+    if (resultEl) resultEl.innerHTML = '<div class="pki-status-loading">Testing NTLM auth and OTP fetch…</div>';
+    try {
+      const data = await fetchJSON("/api/pki/test-ndes-otp", {
+        method: "POST",
+        body: JSON.stringify({ ndes_url: url, ntlm_user: ntlmUser, ntlm_password: ntlmPass }),
+      });
+      if (resultEl) resultEl.innerHTML = `<div class="pki-result-ok">&#10003; ${escapeHtml(data.message)}</div>`;
+      showToast("Dynamic OTP test passed", "success");
+    } catch (err) {
+      if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">&#10007; ${escapeHtml(err.message)}</div>`;
+      showToast("NTLM test failed: " + err.message, "error");
+    }
+  } else {
+    // Basic connectivity test (GetCACaps)
+    if (resultEl) resultEl.innerHTML = '<div class="pki-status-loading">Testing NDES connectivity…</div>';
+    try {
+      const data = await fetchJSON("/api/pki/test-ndes", {
+        method: "POST",
+        body: JSON.stringify({ ndes_url: url }),
+      });
+      if (resultEl) resultEl.innerHTML = `<div class="pki-result-ok">&#10003; NDES reachable &mdash; ${escapeHtml(data.message)}</div>`;
+      showToast("NDES reachable", "success");
+    } catch (err) {
+      if (resultEl) resultEl.innerHTML = `<div class="pki-result-error">&#10007; ${escapeHtml(err.message)}</div>`;
+      showToast("NDES test failed: " + err.message, "error");
+    }
   }
 }
 

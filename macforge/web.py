@@ -55,6 +55,7 @@ from macforge.dot1x import check_wpa_supplicant_version
 from macforge.scep_client import (
     enroll_via_scep,
     enroll_via_step_ca,
+    fetch_ndes_otp,
     get_enrollment_capabilities,
 )
 
@@ -852,23 +853,39 @@ async def get_ndes_config():
     cfg = load_ndes_config()
     return {
         "ndes_url": cfg.ndes_url,
+        "otp_mode": cfg.otp_mode,
         "challenge_saved": bool(cfg.challenge),
+        "ntlm_user": cfg.ntlm_user,
+        "ntlm_password_saved": bool(cfg.ntlm_password),
+        "ca_fingerprint": cfg.ca_fingerprint,
     }
 
 
 class NDESConfigPayload(BaseModel):
     ndes_url: str = ""
+    otp_mode: str = "static"
     challenge: str = ""
+    ntlm_user: str = ""
+    ntlm_password: str = ""
+    ca_fingerprint: str = ""
 
 
 @app.put("/api/pki/ndes-config")
 async def update_ndes_config(payload: NDESConfigPayload):
     existing = load_ndes_config()
-    # Keep the stored challenge if the client sent a blank value (field was left empty)
+    # Preserve stored secrets when the client sends blank (field was left empty)
     challenge = payload.challenge if payload.challenge else existing.challenge
-    cfg = NDESConfig(ndes_url=payload.ndes_url.strip(), challenge=challenge)
+    ntlm_password = payload.ntlm_password if payload.ntlm_password else existing.ntlm_password
+    cfg = NDESConfig(
+        ndes_url=payload.ndes_url.strip(),
+        otp_mode=payload.otp_mode,
+        challenge=challenge,
+        ntlm_user=payload.ntlm_user.strip(),
+        ntlm_password=ntlm_password,
+        ca_fingerprint=payload.ca_fingerprint.strip(),
+    )
     save_ndes_config(cfg)
-    return {"status": "saved", "ndes_url": cfg.ndes_url}
+    return {"status": "saved", "ndes_url": cfg.ndes_url, "otp_mode": cfg.otp_mode}
 
 
 class TestNDESPayload(BaseModel):
@@ -898,6 +915,37 @@ async def api_test_ndes(payload: TestNDESPayload):
         raise HTTPException(status_code=400, detail=f"NDES returned HTTP {exc.code}")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not reach NDES: {exc}")
+
+class TestNTLMOTPPayload(BaseModel):
+    ndes_url: str
+    ntlm_user: str = ""
+    ntlm_password: str = ""  # if blank, use saved credentials
+
+
+@app.post("/api/pki/test-ndes-otp")
+async def api_test_ndes_otp(payload: TestNTLMOTPPayload):
+    """Attempt NTLM auth against the NDES admin page and confirm OTP retrieval.
+
+    Returns success with OTP length (not the OTP itself) so the caller can
+    confirm Dynamic OTP mode is working before committing an enrollment.
+    """
+    saved = load_ndes_config()
+    ntlm_user = payload.ntlm_user or saved.ntlm_user
+    ntlm_password = payload.ntlm_password or saved.ntlm_password
+    if not ntlm_user or not ntlm_password:
+        raise HTTPException(status_code=400, detail="NTLM username and password are required.")
+    try:
+        loop = asyncio.get_event_loop()
+        otp = await loop.run_in_executor(
+            None, fetch_ndes_otp, payload.ndes_url, ntlm_user, ntlm_password
+        )
+        return {
+            "status": "ok",
+            "message": f"NTLM authentication succeeded — OTP retrieved ({len(otp)} chars).",
+        }
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 
 class StepCAEnrollPayload(BaseModel):
     ca_url: str
@@ -930,15 +978,18 @@ class SCEPEnrollPayload(BaseModel):
 
 @app.post("/api/pki/enroll-scep")
 async def api_enroll_scep(payload: SCEPEnrollPayload):
-    challenge = payload.challenge
-    if not challenge:
-        saved = load_ndes_config()
-        challenge = saved.challenge
+    saved = load_ndes_config()
+    # Use saved challenge as fallback when field is blank
+    challenge = payload.challenge or saved.challenge
     result = await enroll_via_scep(
         ndes_url=payload.ndes_url,
         challenge=challenge,
         cn=payload.cn,
         san=payload.san,
+        otp_mode=saved.otp_mode,
+        ntlm_user=saved.ntlm_user,
+        ntlm_password=saved.ntlm_password,
+        ca_fingerprint=saved.ca_fingerprint,
     )
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
