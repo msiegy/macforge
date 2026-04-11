@@ -76,6 +76,8 @@ RUN apt-get update && \
     && cat .config \
     && make -j$(nproc) \
     && install -m 755 wpa_supplicant /usr/local/sbin/wpa_supplicant_teap \
+    && make eapol_test \
+    && install -m 755 eapol_test /usr/local/bin/eapol_test \
     \
     # ── clean up build deps and temp files ──────────────────────────────────
     && apt-get purge -y gcc make libssl-dev pkg-config wget git autoconf automake libtool \

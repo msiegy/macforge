@@ -17,11 +17,6 @@
     <div class="header-right">
       <button class="interface-badge" id="interfaceBadge" onclick="toggleIfacePanel()" title="Click to view/change interfaces">--</button>
       <button class="readiness-btn" id="readinessBtn" onclick="showReadinessDetail()" title="System readiness — click for details">⏳ checking…</button>
-      <label class="toggle-switch" title="Enable SNMP responder for device profiling">
-        <input type="checkbox" id="snmpToggle">
-        <span class="toggle-slider"></span>
-        <span class="toggle-label" id="snmpLabel">SNMP</span>
-      </label>
       <button class="btn btn-connect-all" id="connectAllBtn">Connect All</button>
       <button class="btn btn-disconnect-all" id="disconnectAllBtn">Disconnect All</button>
     </div>
@@ -43,12 +38,15 @@
       <span class="tab-icon">&#9632;</span> Devices
       <span class="tab-count" id="tabDeviceCount">0</span>
     </button>
+    <button class="tab" data-tab="radius">
+      <span class="tab-icon">&#128268;</span> NAD Emulator
+    </button>
     <button class="tab" data-tab="certs">
       <span class="tab-icon">&#128274;</span> Certificates
       <span class="tab-count" id="tabCertCount">0</span>
     </button>
     <button class="tab" data-tab="logs">
-      <span class="tab-icon">&#9776;</span> Packet Log
+      <span class="tab-icon">&#9776;</span> Activity Log
       <span class="tab-count" id="tabLogCount">0</span>
     </button>
   </nav>
@@ -362,12 +360,594 @@
     <div class="tab-pane" id="pane-logs">
       <div class="log-panel log-panel-full">
         <div class="log-header">
-          <h2>Packet Log</h2>
+          <h2>Activity Log <span style="font-size:12px;font-weight:400;color:var(--text-muted)">— device emulator events (EAPOL, DHCP, ICMP, ARP)</span></h2>
           <span class="log-count" id="logCount">0 entries</span>
         </div>
         <div class="log-entries" id="logEntries">
-          <div class="empty-state">No packets sent yet</div>
+          <div class="empty-state">No activity yet — connect a device to see events here</div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── NAD Emulator Tab ──────────────────────────────── -->
+    <div class="tab-pane" id="pane-radius">
+      <div class="cert-page">
+
+        <div class="cert-page-header">
+          <div>
+            <h1 class="cert-page-title">NAD Emulator</h1>
+            <p class="cert-page-subtitle">Send RADIUS auth and accounting directly to ISE — no physical switch required.</p>
+          </div>
+        </div>
+
+        <!-- ── RADIUS Configuration ──────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9881;</span>
+            <h2 class="cert-section-title">RADIUS NAD Configuration</h2>
+          </div>
+          <div class="cert-actions-card">
+            <div class="ise-panel-grid">
+              <div class="form-group">
+                <label class="form-label cert-field-label">ISE PSN IP / Hostname</label>
+                <input type="text" class="form-input" id="radiusIseIp" placeholder="10.x.x.x or psn.lab.local">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">Shared Secret</label>
+                <div class="password-wrapper">
+                  <input type="password" class="form-input" id="radiusSecret" placeholder="RADIUS shared secret">
+                  <button type="button" class="password-toggle" onclick="togglePasswordVis('radiusSecret')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">NAS-IP-Address
+                  <span class="form-hint-inline">— ISE matches the Network Device by the <b>UDP source IP</b> of the RADIUS packet, which is MACforge's host IP. Set this to MACforge's IP and register the NAD with the same IP.</span>
+                </label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" class="form-input" id="radiusNasIp" placeholder="e.g. 192.168.1.204" style="flex:1">
+                  <button type="button" class="btn-sm" onclick="detectNasIp()" title="Auto-detect MACforge host IP">Detect</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">NAS-Identifier</label>
+                <input type="text" class="form-input" id="radiusNasId" placeholder="macforge-nad">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">Auth Port</label>
+                <input type="number" class="form-input" id="radiusPort" value="1812" min="1" max="65535">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">Acct Port</label>
+                <input type="number" class="form-input" id="radiusAcctPort" value="1813" min="1" max="65535">
+              </div>
+              <div class="form-group">
+                <label class="form-label cert-field-label">CoA Listen Port
+                  <span class="form-hint-inline">— 1700 = Cisco profile (ISE default), 3799 = RFC 5176</span>
+                </label>
+                <input type="number" class="form-input" id="radiusCoaPort" value="1700" min="1" max="65535">
+              </div>
+              <div class="form-group form-toggle">
+                <label class="form-label cert-field-label">Enable CoA Listener</label>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="radiusCoaEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="form-hint">Binds UDP port to receive ISE-initiated CoA / Disconnect</span>
+              </div>
+            </div>
+            <div class="ise-panel-actions">
+              <button class="btn btn-save" onclick="saveRadiusConfig()">Save Settings</button>
+              <button class="btn btn-section-connect" onclick="testRadiusConnection()">Test RADIUS</button>
+              <button class="btn btn-accent" onclick="registerNADinISE()" title="Requires ISE REST to be configured in Certificates tab">Register NAD in ISE</button>
+              <button class="btn btn-remove" onclick="removeNADfromISE()" title="Remove the auto-registered Network Device from ISE">Remove NAD</button>
+            </div>
+            <div id="radiusConfigStatus" class="ise-inline-status"></div>
+          </div>
+        </div>
+
+        <!-- ── Session Builder ───────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9654;</span>
+            <h2 class="cert-section-title">Session Builder</h2>
+          </div>
+          <div class="cert-actions-card">
+            <div class="radius-builder-grid">
+              <div class="form-group">
+                <label class="form-label cert-field-label">Auth Type</label>
+                <div class="radius-auth-type-row">
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="mab" checked onchange="onRadiusAuthTypeChange()"> MAB
+                  </label>
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="pap" onchange="onRadiusAuthTypeChange()"> PAP
+                  </label>
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="peap" onchange="onRadiusAuthTypeChange()"> EAP-PEAP-MSCHAPv2
+                  </label>
+                  <label class="radius-radio-label">
+                    <input type="radio" name="radiusAuthType" value="eap-tls" onchange="onRadiusAuthTypeChange()"> EAP-TLS
+                  </label>
+                </div>
+              </div>
+
+              <!-- MAB: optional device profile picker -->
+              <div id="radiusMabProfileRow" class="form-group">
+                <label class="form-label cert-field-label">Device Profile <span class="form-hint-inline">— pick a YAML profile to use its real OUI so ISE profiles the endpoint correctly</span></label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <select class="form-input" id="radiusProfileSelect" style="flex:1" onchange="onRadiusProfileSelect()">
+                    <option value="">— none (use MAC below) —</option>
+                  </select>
+                  <button type="button" class="btn-sm" onclick="loadRadiusProfiles()" title="Reload profiles">&#8635;</button>
+                </div>
+                <div id="radiusProfileHint" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+              </div>
+
+              <div class="form-group" id="radiusMacRow">
+                <label class="form-label cert-field-label">MAC Address <span class="form-hint-inline">(blank = random)</span></label>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" class="form-input" id="radiusMac" placeholder="aa:bb:cc:dd:ee:ff" style="flex:1;font-family:monospace">
+                  <button type="button" class="btn-sm" onclick="randomizeMacDeviceId()" title="Keep OUI, randomize device ID (last 3 octets)">&#x1F500;</button>
+                </div>
+              </div>
+              <div class="form-group" id="radiusUsernameRow" style="display:none">
+                <label class="form-label cert-field-label">Username / Identity</label>
+                <input type="text" class="form-input" id="radiusUsername" placeholder="user@domain.local">
+              </div>
+              <div class="form-group" id="radiusPasswordRow" style="display:none">
+                <label class="form-label cert-field-label">Password</label>
+                <div class="password-wrapper">
+                  <input type="password" class="form-input" id="radiusPassword" placeholder="Password">
+                  <button type="button" class="password-toggle" onclick="togglePasswordVis('radiusPassword')"><svg class="eye-icon" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                </div>
+              </div>
+
+              <!-- EAP-TLS specific fields -->
+              <div id="radiusTlsFields" style="display:none">
+                <div class="form-group">
+                  <label class="form-label cert-field-label">Client Certificate
+                    <span class="form-hint-inline">— must be signed by a CA that ISE trusts</span>
+                  </label>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <select class="form-input" id="radiusCertSelect" style="flex:1" onchange="onRadiusCertSelect()">
+                      <option value="">— select a certificate —</option>
+                    </select>
+                    <button type="button" class="btn-sm" onclick="loadRadiusCerts()" title="Refresh list">&#8635;</button>
+                    <button type="button" class="btn-sm btn-accent" onclick="showIssueCertPanel()">+ Issue</button>
+                  </div>
+                  <div id="radiusCertHint" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+                </div>
+                <div class="form-group">
+                  <label class="form-label cert-field-label" style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" id="radiusValidateServerCert" onchange="onRadiusValidateServerCertChange()">
+                    Validate ISE server certificate
+                  </label>
+                </div>
+                <div class="form-group" id="radiusIseCaCertRow" style="display:none">
+                  <label class="form-label cert-field-label">ISE Server CA
+                    <span class="form-hint-inline">— CA that signed ISE's TLS cert (Administration › Certificates › Trusted Certificates)</span>
+                  </label>
+                  <select class="form-input" id="radiusCaCertSelect">
+                    <option value="">— select ISE CA cert —</option>
+                  </select>
+                </div>
+
+                <!-- Issue new cert panel (hidden by default) -->
+                <div id="issueCertPanel" style="display:none;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:8px">
+                  <div style="font-weight:600;margin-bottom:10px;font-size:13px">Issue New EAP-TLS Certificate</div>
+                  <div class="radius-builder-grid">
+                    <div class="form-group">
+                      <label class="form-label cert-field-label">Common Name (CN)</label>
+                      <input type="text" class="form-input" id="issueCertCn" placeholder="user@corp.com or host/machine.corp.com">
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label cert-field-label">SAN (email, optional)</label>
+                      <input type="text" class="form-input" id="issueCertSan" placeholder="user@corp.com">
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:8px;margin-top:8px">
+                    <button class="btn btn-accent btn-sm" onclick="issueEapTlsCert()">Issue Certificate</button>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('issueCertPanel').style.display='none'">Cancel</button>
+                  </div>
+                  <div id="issueCertStatus" style="font-size:12px;margin-top:8px"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Session Count — always visible so user always knows how many sessions will run -->
+            <div class="form-group" style="margin-top:12px">
+              <label class="form-label cert-field-label">Session Count</label>
+              <input type="number" class="form-input" id="radiusCount" value="1" min="1" max="10000"
+                     style="max-width:140px" oninput="_updateRunBtnLabel()">
+            </div>
+
+            <!-- Bulk controls -->
+            <details class="stepca-details" id="radiusBulkDetails" style="margin-top:8px">
+              <summary class="stepca-summary">
+                <span class="stepca-summary-title">Bulk Options <span class="stepca-badge">Optional</span></span>
+                <span class="stepca-summary-desc">Concurrency, delay, MAC / profile source for multi-session runs.</span>
+              </summary>
+              <div class="stepca-body">
+                <div class="radius-builder-grid">
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Concurrency</label>
+                    <input type="number" class="form-input" id="radiusConcurrency" value="5" min="1" max="200">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Delay between sessions (ms)</label>
+                    <input type="number" class="form-input" id="radiusDelay" value="0" min="0">
+                  </div>
+                  <div class="form-group" id="radiusUsernameTemplateRow">
+                    <label class="form-label cert-field-label">Username Template <span class="form-hint-inline">{n} = index</span></label>
+                    <input type="text" class="form-input" id="radiusUsernameTemplate" value="user{n}@lab.local">
+                  </div>
+                  <div class="form-group" id="radiusBulkSourceRow">
+                    <label class="form-label cert-field-label">MAC / Profile Source</label>
+                    <select class="form-input" id="radiusBulkSource" onchange="onBulkSourceChange()">
+                      <option value="random">Random (DE:AD:BE OUI)</option>
+                      <option value="profiles">From YAML profiles — random profile per session (OUI + DHCP hints)</option>
+                      <option value="category">By device category — vendor OUI only</option>
+                    </select>
+                  </div>
+                  <div class="form-group" id="radiusDeviceCategoryRow" style="display:none">
+                    <label class="form-label cert-field-label">Device Category</label>
+                    <select class="form-input" id="radiusDeviceCategory">
+                      <option value="">— any —</option>
+                      <option value="laptop">Laptop (Intel / Apple / Dell / Lenovo)</option>
+                      <option value="desktop">Desktop (Intel / Dell / HP)</option>
+                      <option value="smartphone">Smartphone (Apple / Samsung / Google)</option>
+                      <option value="tablet">Tablet (Apple / Samsung)</option>
+                      <option value="printer">Printer (HP / Brother / Xerox / Ricoh / Lexmark)</option>
+                      <option value="iot">IoT (Amazon / Google / Roku / Cisco / Samsung)</option>
+                      <option value="server">Server (Dell / HPE / Parallels)</option>
+                      <option value="gaming">Gaming (Nintendo / Sony / Microsoft)</option>
+                      <option value="medical">Medical (Philips / BD / GE)</option>
+                      <option value="industrial">Industrial (Siemens / Allen-Bradley / Honeywell)</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label cert-field-label">Base MAC <span class="form-hint-inline">(optional — overrides source above; increments per session)</span></label>
+                    <input type="text" class="form-input" id="radiusBaseMac" placeholder="AA:BB:CC:00:00:00">
+                  </div>
+                </div>
+                <!-- Dictionary integration -->
+                <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px">
+                  <label id="radiusCredDictRow" style="display:none;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="radiusCredDict" style="width:16px;height:16px">
+                    <span class="form-label cert-field-label" style="margin:0">Use credential dictionary</span>
+                    <span class="form-hint-inline">(cycles through stored usernames/passwords)</span>
+                  </label>
+                  <label id="radiusMacDictRow" style="display:none;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="radiusMacDict" style="width:16px;height:16px">
+                    <span class="form-label cert-field-label" style="margin:0">Use MAC dictionary</span>
+                    <span class="form-hint-inline">(cycles through stored MAC addresses)</span>
+                  </label>
+                </div>
+              </div>
+            </details>
+
+            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;align-items:flex-end">
+              <div class="form-group" id="radiusSessionLifetimeRow" style="margin:0">
+                <label class="form-label cert-field-label">Session Lifetime
+                  <span class="form-hint-inline">— <b>Manual</b> for CoA testing; <b>Immediate</b> for bulk load runs.</span>
+                </label>
+                <select class="form-input" id="radiusSessionLifetime" style="max-width:240px"
+                        onchange="_onLifetimeChange()">
+                  <option value="-1" selected>Immediate</option>
+                  <option value="0">Manual (live until terminated)</option>
+                  <option value="60">1 minute</option>
+                  <option value="300">5 minutes</option>
+                  <option value="900">15 minutes</option>
+                  <option value="3600">1 hour</option>
+                </select>
+              </div>
+              <div class="form-group" id="radiusTerminateCauseRow" style="margin:0;display:none">
+                <label class="form-label cert-field-label">Disconnect Cause</label>
+                <select class="form-input" id="radiusTerminateCause" style="max-width:230px">
+                  <option value="auto">Auto (recommended)</option>
+                  <option value="User-Request">User-Request — clean shutdown / logoff</option>
+                  <option value="Lost-Carrier">Lost-Carrier — cable unplugged / link-down</option>
+                  <option value="Session-Timeout">Session-Timeout — NAS timer / ISE policy</option>
+                  <option value="Admin-Reset">Admin-Reset — administrator cleared session</option>
+                  <option value="Lost-Power">Lost-Power — device lost power</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Custom RADIUS Attributes -->
+            <details class="stepca-details" style="margin-top:12px;background:var(--surface-2,#1e293b)">
+              <summary class="stepca-summary">
+                <span class="stepca-summary-title">Custom RADIUS Attributes <span class="stepca-badge" id="customAttrsBadge" style="display:none">0</span></span>
+                <span class="stepca-summary-desc">Extra NAD-side attributes appended to packets (use for vendor VSAs, policy hints, etc.). Core auth attrs are managed automatically.</span>
+              </summary>
+              <div class="stepca-body">
+                <div id="customAttrsTable" style="margin-bottom:8px;min-height:32px">
+                  <em style="color:#94a3b8;font-size:13px">No custom attributes. Click "Add Attribute" to begin. Values are sent exactly as entered; dynamic per-session fields (NAS-Port, Session-ID, MACs, etc.) are always managed internally.</em>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-sm btn-secondary" onclick="openAttrModal()">+ Add Attribute</button>
+                  <button class="btn btn-sm btn-secondary" onclick="openAttrSetModal()">&#128190; Load Set</button>
+                  <button class="btn btn-sm btn-secondary" onclick="saveCurrentAttrSet()">&#128190; Save Set</button>
+                  <button class="btn btn-sm btn-remove" style="margin-left:auto" onclick="clearCustomAttrs()">Clear All</button>
+                </div>
+              </div>
+            </details>
+
+            <div class="cert-action-row" style="margin-top:16px">
+              <button class="btn btn-accent" id="radiusRunBtn" onclick="runRadiusSessions()">Run Session</button>
+              <button class="btn btn-remove" id="radiusCancelBtn" onclick="cancelRadiusBulk()" style="display:none">Cancel</button>
+            </div>
+
+            <!-- Bulk progress -->
+            <div id="radiusBulkProgress" style="display:none; margin-top:12px">
+              <div class="radius-progress-bar-wrap">
+                <div class="radius-progress-bar" id="radiusProgressBar" style="width:0%"></div>
+              </div>
+              <div class="radius-progress-stats" id="radiusProgressStats">Starting…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Session Results ───────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#128200;</span>
+            <h2 class="cert-section-title">Session Results</h2>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" onclick="loadRadiusSessions()">Refresh</button>
+              <button class="btn btn-sm btn-accent" onclick="exportRadiusCsv()" title="Download as CSV">&#8681; CSV</button>
+              <button class="btn btn-sm btn-remove" onclick="clearRadiusSessions()">Clear</button>
+            </div>
+          </div>
+          <div id="radiusSessionStats" class="radius-summary-bar"></div>
+          <div class="cert-table-card">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="radiusSessionTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>MAC / User</th>
+                    <th>Result</th>
+                    <th>Acct-Session-ID</th>
+                    <th>Duration</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="radiusSessionBody">
+                  <tr><td colspan="7" class="cert-table-empty">No sessions yet — run one above.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Live Sessions ─────────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#128994;</span>
+            <h2 class="cert-section-title">Live Sessions <span class="stepca-badge" id="liveSessionsBadge" style="display:none">0 active</span></h2>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" onclick="loadLiveSessions()">Refresh</button>
+              <button class="btn btn-sm btn-remove" onclick="terminateAllLiveSessions()" id="terminateAllBtn" style="display:none">Terminate All</button>
+            </div>
+          </div>
+          <div id="liveSessionsEmpty" style="padding:12px 16px;color:var(--text-muted);font-size:13px">
+            No live sessions — run a session with lifetime <b>Manual</b> or timed to create one.
+          </div>
+          <div class="cert-table-card" id="liveSessionsTableWrap" style="display:none">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="liveSessionsTable">
+                <thead>
+                  <tr>
+                    <th>Acct-Session-ID</th>
+                    <th>Type</th>
+                    <th>MAC</th>
+                    <th>Username</th>
+                    <th>Framed IP</th>
+                    <th>Uptime</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="liveSessionsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Dictionaries ─────────────────────────────── -->
+        <div class="cert-section">
+          <details class="stepca-details" style="background:transparent;box-shadow:none;padding:0">
+            <summary class="stepca-summary" style="border-radius:8px">
+              <span class="cert-section-icon" style="font-size:18px">&#128218;</span>
+              <span class="stepca-summary-title">Dictionaries
+                <span class="stepca-badge">Credentials &amp; MACs</span>
+              </span>
+              <span class="stepca-summary-desc">Store lists of usernames/passwords and MAC addresses for bulk session cycling.</span>
+            </summary>
+            <div class="stepca-body" style="padding-top:12px">
+              <!-- Sub-tabs -->
+              <div style="display:flex;gap:8px;margin-bottom:12px">
+                <button class="btn btn-sm btn-secondary" id="dictTabCreds" onclick="switchDictTab('creds')"
+                        style="border-bottom:2px solid var(--accent)">Credentials</button>
+                <button class="btn btn-sm btn-secondary" id="dictTabMacs" onclick="switchDictTab('macs')">MACs</button>
+              </div>
+
+              <!-- Credentials sub-panel -->
+              <div id="dictPanelCreds">
+                <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:flex-end">
+                  <input type="text" class="form-input" id="dictCredUsername" placeholder="username" style="max-width:180px">
+                  <input type="password" class="form-input" id="dictCredPassword" placeholder="password" style="max-width:160px">
+                  <button class="btn btn-sm btn-secondary" onclick="addDictCredential()">Add</button>
+                  <button class="btn btn-sm btn-secondary" onclick="showDictImport('creds')" style="margin-left:4px">&#8679; Import CSV</button>
+                  <button class="btn btn-sm btn-remove" style="margin-left:auto" onclick="clearDictCredentials()">Clear All</button>
+                </div>
+                <!-- Inline paste area (hidden by default) -->
+                <div id="dictImportCredPanel" style="display:none;margin-bottom:8px">
+                  <textarea class="form-input" id="dictImportCredText" rows="4" style="width:100%;font-family:monospace;font-size:12px"
+                            placeholder="username,password&#10;alice,pass1&#10;bob,pass2"></textarea>
+                  <div style="display:flex;gap:8px;margin-top:4px">
+                    <button class="btn btn-sm btn-secondary" onclick="importDictCsv('creds')">Import</button>
+                    <button class="btn btn-sm btn-secondary" onclick="document.getElementById('dictImportCredPanel').style.display='none'">Cancel</button>
+                  </div>
+                </div>
+                <div class="cert-table-card">
+                  <div class="cert-table-wrap">
+                    <table class="cert-table" id="dictCredTable">
+                      <thead><tr><th>Username</th><th>Password</th><th></th></tr></thead>
+                      <tbody id="dictCredBody">
+                        <tr><td colspan="3" class="cert-table-empty">No credentials stored.</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <!-- MACs sub-panel -->
+              <div id="dictPanelMacs" style="display:none">
+                <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:flex-end">
+                  <input type="text" class="form-input" id="dictMacValue" placeholder="AA:BB:CC:DD:EE:FF" style="max-width:200px">
+                  <button class="btn btn-sm btn-secondary" onclick="addDictMac()">Add</button>
+                  <button class="btn btn-sm btn-secondary" onclick="showDictImport('macs')" style="margin-left:4px">&#8679; Import CSV</button>
+                  <button class="btn btn-sm btn-remove" style="margin-left:auto" onclick="clearDictMacs()">Clear All</button>
+                </div>
+                <div id="dictImportMacPanel" style="display:none;margin-bottom:8px">
+                  <textarea class="form-input" id="dictImportMacText" rows="4" style="width:100%;font-family:monospace;font-size:12px"
+                            placeholder="AA:BB:CC:DD:EE:FF&#10;11:22:33:44:55:66"></textarea>
+                  <div style="display:flex;gap:8px;margin-top:4px">
+                    <button class="btn btn-sm btn-secondary" onclick="importDictCsv('macs')">Import</button>
+                    <button class="btn btn-sm btn-secondary" onclick="document.getElementById('dictImportMacPanel').style.display='none'">Cancel</button>
+                  </div>
+                </div>
+                <div class="cert-table-card">
+                  <div class="cert-table-wrap">
+                    <table class="cert-table" id="dictMacTable">
+                      <thead><tr><th>MAC Address</th><th></th></tr></thead>
+                      <tbody id="dictMacBody">
+                        <tr><td colspan="2" class="cert-table-empty">No MACs stored.</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </details>
+        </div>
+
+        <!-- ── Jobs / History ───────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#128203;</span>
+            <h2 class="cert-section-title">Bulk Job History</h2>
+            <div style="margin-left:auto;display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" onclick="loadJobs()">Refresh</button>
+              <button class="btn btn-sm btn-remove" onclick="clearCompletedJobs()">Clear Completed</button>
+            </div>
+          </div>
+          <div class="cert-table-card">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="jobHistoryTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Count</th>
+                    <th>Accept</th>
+                    <th>Reject</th>
+                    <th>Errors</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="jobHistoryBody">
+                  <tr><td colspan="9" class="cert-table-empty">No bulk jobs yet. Run a bulk session to see history here.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── CoA Events ────────────────────────────────── -->
+        <div class="cert-section">
+          <div class="cert-section-hdr">
+            <span class="cert-section-icon">&#9889;</span>
+            <h2 class="cert-section-title">CoA Events <span class="stepca-badge" id="coaListenerBadge" style="display:none">Listening</span></h2>
+            <button class="btn btn-sm btn-secondary" onclick="clearCoaEvents()" style="margin-left:auto">Clear</button>
+          </div>
+          <div class="cert-table-card">
+            <div class="cert-table-wrap">
+              <table class="cert-table" id="coaEventTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Source IP</th>
+                    <th>MAC</th>
+                    <th>Session ID</th>
+                    <th>Response</th>
+                  </tr>
+                </thead>
+                <tbody id="coaEventBody">
+                  <tr><td colspan="6" class="cert-table-empty">No CoA events received yet. Enable the CoA listener above.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── RADIUS Attribute Picker Modal ────────────────────── -->
+    <div id="attrPickerModal" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.55);align-items:center;justify-content:center">
+      <div style="background:var(--surface,#0f172a);border:1px solid var(--border,#334155);border-radius:12px;width:min(700px,96vw);max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border,#334155);display:flex;align-items:center;gap:12px">
+          <span style="font-weight:600;font-size:15px">Add Custom RADIUS Attribute</span>
+          <button class="btn btn-sm btn-secondary" style="margin-left:auto" onclick="closeAttrModal()">&#10005;</button>
+        </div>
+        <div style="display:flex;flex:1;overflow:hidden">
+          <!-- Left: attribute catalog -->
+          <div style="width:55%;border-right:1px solid var(--border,#334155);overflow-y:auto;padding:12px">
+            <input type="text" class="form-input" id="attrSearch" placeholder="Search attributes…" style="margin-bottom:8px"
+                   oninput="_filterAttrCatalog()">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="attrVendorFilters"></div>
+            <div id="attrCatalogList" style="font-size:13px"></div>
+          </div>
+          <!-- Right: configuration for the selected attribute -->
+          <div style="width:45%;padding:16px;display:flex;flex-direction:column;gap:10px">
+            <div class="form-group">
+              <label class="form-label cert-field-label">Attribute</label>
+              <input type="text" class="form-input" id="attrName" placeholder="e.g. Tunnel-Pvt-Group-Id">
+            </div>
+            <div class="form-group">
+              <label class="form-label cert-field-label">Value</label>
+              <input type="text" class="form-input" id="attrValue" placeholder="e.g. 100">
+            </div>
+            <div class="form-group">
+              <label class="form-label cert-field-label">Apply to</label>
+              <select class="form-input" id="attrPacket">
+                <option value="all">All packets (auth + accounting)</option>
+                <option value="auth">Authentication only</option>
+                <option value="acct-start">Accounting-Start only</option>
+                <option value="acct-stop">Accounting-Stop only</option>
+              </select>
+            </div>
+            <button class="btn btn-accent" onclick="confirmAddAttr()">Add</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Attribute Set (Load/Save) Modal ───────────────────── -->
+    <div id="attrSetModal" style="display:none;position:fixed;inset:0;z-index:9001;background:rgba(0,0,0,0.55);align-items:center;justify-content:center">
+      <div style="background:var(--surface,#0f172a);border:1px solid var(--border,#334155);border-radius:12px;width:min(420px,96vw);padding:20px">
+        <div style="display:flex;align-items:center;margin-bottom:14px">
+          <span style="font-weight:600">Load Attribute Set</span>
+          <button class="btn btn-sm btn-secondary" style="margin-left:auto" onclick="closeAttrSetModal()">&#10005;</button>
+        </div>
+        <div id="attrSetList" style="font-size:13px;max-height:300px;overflow-y:auto"></div>
       </div>
     </div>
 

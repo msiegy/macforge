@@ -9,16 +9,27 @@ MACforge is a Docker-based tool that emulates multiple network devices by spoofi
 
 ## What It Does
 
-- Emulates 20+ device types (Windows, Apple, gaming consoles, IoT, printers, medical, industrial)
-- Each emulated device sends traffic with a real manufacturer OUI and accurate DHCP fingerprint
-- **802.1X supplicant support** -- PEAP-MSCHAPv2, EAP-TLS, EAP-FAST, EAP-TTLS, TEAP via wpa_supplicant (dual-binary: apt build for all non-TEAP methods; source-built with `CONFIG_EAP_TEAP=y` for TEAP only)
+**Device Emulator** — connects emulated endpoints to a real switch port:
+- Emulates 40+ device types across 9 categories (Windows, Apple, gaming, IoT, printers, Linux, medical, industrial, 802.1X)
+- Each emulated device sends traffic with a real manufacturer OUI and accurate fingerprints
+- **802.1X supplicant support** — PEAP-MSCHAPv2, EAP-TLS, EAP-FAST, EAP-TTLS, TEAP* via wpa_supplicant
 - Full DHCP lifecycle: Discover/Request on connect, Release on disconnect
 - ARP keepalives + TCP SYN probes to maintain switch CAM entries and satisfy client-visibility platforms (Meraki, etc.)
-- Deterministic per-host MAC addresses -- same hardware always generates the same MACs; different hardware produces different MACs
-- SNMP responder for device profiling with per-device system MIB profiles
-- Web UI for real-time device control, 802.1X configuration, and certificate management
-- Compact touch UI for Raspberry Pi displays
+- Deterministic per-host MAC addresses — same host hardware always generates the same MACs; different hardware produces different MACs
+- SNMP responder for device profiling with per-device system MIB profiles (automatic; no configuration required)
 - Stealth mode: drops inbound nmap probes so ISE only profiles based on crafted traffic
+
+**NAD Emulator** — sends RADIUS packets directly to ISE, no physical switch required:
+- Emulates a RADIUS NAS (network access device) sending authentication and accounting packets
+- Supports MAB, PAP, PEAP-MSCHAPv2, and EAP-TLS authentication flows
+- Bulk session generation for load testing (hundreds to thousands of sessions)
+- Live session mode — keeps Acct-Start open so ISE can send CoA Disconnect or Re-auth back
+- Built-in CoA listener (UDP 1700) to receive and display ISE-initiated Change of Authorization
+- Credential and MAC dictionaries for cycling through realistic identity sets in bulk runs
+- Per-run job history with accept/reject/error counts and repeat capability
+- Custom RADIUS attribute injection for advanced policy testing
+
+**Web UI** for real-time control of both modes, certificate management, and session results.
 
 ## Quick Start
 
@@ -104,12 +115,12 @@ Built-in profiles are in `profiles/`. Each YAML file defines one or more devices
 | Windows | Windows 10 Desktop, Windows 11 Laptop |
 | Apple | iPhone, iPad, MacBook Pro |
 | Gaming | Nintendo Switch, PlayStation 5, Xbox Series X |
-| IoT | Roku, Amazon Echo, Google Nest, Samsung Smart TV |
-| Printers | HP LaserJet, Brother MFC |
-| Linux | Ubuntu Server, RHEL Server |
-| Medical | Philips Patient Monitor, BD Alaris Infusion Pump |
+| IoT | Roku Streaming Stick, Amazon Echo, Google Nest Thermostat, Samsung Smart TV, Crestron TouchScreen, Crestron DMP, Axis P3375 Camera, Axis M3045 Camera |
+| Printers | HP LaserJet, Brother, Xerox VersaLink MFP, Xerox 4127, Ricoh MP C3004, Ricoh Aficio SP 8200DN, Ricoh Aficio SP 8300DN, Lexmark MFP, Lexmark T630, Lexmark T654, Dell Laser, Canon MF4690, Zebra ZT410, Zebra ZD510 |
+| Linux | Ubuntu Server, Ubuntu Workstation, RHEL Server, Chromebook |
+| Medical | Philips Patient Monitor, BD Alaris Infusion Pump, Armorlink CE Anesthesia, Armorlink CE Dialysis |
 | Industrial | Siemens SIMATIC PLC, Allen-Bradley PLC, Honeywell Controller |
-| 802.1X | Corporate Win11 (PEAP), iPhone 15 (PEAP), Cisco IP Phone (EAP-FAST) |
+| 802.1X | Corporate Win11 (PEAP), Cisco IP Phone (EAP-FAST) |
 
 ## 802.1X (dot1x) Support
 
@@ -139,18 +150,130 @@ This outputs `lab-ca.pem`, `client.pem`, and `client.key` into `~/macforge/data/
 
 ## Web UI
 
-The dashboard at `http://<host>:8080` provides:
+The dashboard at `http://<host>:8080` is organized into four tabs:
 
+**Devices** — device emulator control:
 - Device cards with current state (Stopped / Connecting / Authenticating / Online / Auth Failed)
 - Auth method badges on dot1x devices (PEAP, EAP-TLS, etc.)
 - 802.1X configuration drawer with method-dependent form fields
-- Certificate upload (drag-and-drop) and PEM paste modal
-- Per-device Connect/Disconnect buttons
+- Per-device Connect / Disconnect, ping, and packet inspector
 - Connect All / Disconnect All batch controls
-- ICMP ping with custom targets per device
-- Live packet log (DHCP, ARP, EAPOL, mDNS, SSDP events)
-- SNMP responder toggle
-- Device fingerprint details (MAC, hostname, vendor class, IP)
+- Device fingerprint details (MAC, hostname, vendor class, IP, assigned VLAN)
+
+**NAD Emulator** — RADIUS NAS simulation:
+- Session builder for MAB, PAP, PEAP, and EAP-TLS flows
+- Device profile selection for realistic DHCP profiling hints in accounting packets
+- Bulk session generation with concurrency and delay controls
+- Live session panel and CoA event log
+- Bulk job history with repeat and clear controls
+- Credential and MAC dictionaries for bulk cycling
+- Custom RADIUS attribute picker driven by RFC and vendor dictionaries
+
+**Certificates** — certificate lifecycle management:
+- Upload or drag-and-drop PEM/DER certificates and private keys
+- In-browser certificate generation (self-signed CA and client certs for EAP-TLS)
+- CSR generation and SCEP enrollment (for ISE PKI integration)
+- Certificate detail view (subject, issuer, validity, key info)
+
+**Activity Log** — unified event log:
+- DHCP, ARP, EAPOL, ICMP, mDNS, SSDP events from the device emulator
+- NAD emulator session results (single runs and bulk job summaries)
+
+## NAD Emulator
+
+The NAD Emulator lets MACforge act as a RADIUS network access device, sending authentication and accounting packets directly to ISE over UDP — no physical switch required. This is useful when you want to generate ISE authentication events, test RADIUS policies, or run bulk load tests without needing a real NAD in the path.
+
+### When to use it
+
+| Scenario | Device Emulator | NAD Emulator |
+|---|---|---|
+| Testing switch port policy (MAB, dot1x, dACL, SGT) | ✅ | — |
+| Testing ISE RADIUS policy logic and attribute conditions | — | ✅ |
+| Generating bulk authentication events for ISE load testing | — | ✅ |
+| Keeping sessions alive for CoA testing | — | ✅ |
+| Realistic DHCP/ARP/mDNS traffic after auth | ✅ | — |
+| No physical switch available | — | ✅ |
+
+### Authentication modes
+
+| Mode | Protocol | Use case |
+|---|---|---|
+| MAB | RADIUS Access-Request with `Service-Type: Call Check` | Endpoint authentication by MAC address |
+| PAP | RADIUS Access-Request with `User-Password` | Simple username/password, no EAP |
+| PEAP | EAP-PEAP with MSCHAPv2 inner method via `eapol_test` | User credential testing against AD/Internal Users |
+| EAP-TLS | Mutual TLS certificate authentication via `eapol_test` | Certificate-based machine/user auth |
+
+### Configuration
+
+Configure the NAD emulator via the **NAD Emulator** tab → **NAD Configuration** section:
+
+- **ISE RADIUS IP** — the PSN that will receive the RADIUS packets
+- **Shared Secret** — must match the network device definition in ISE
+- **NAS IP** — the IP ISE will see as the NAS-IP-Address attribute (use MACforge's host IP, or the IP of the network device defined in ISE)
+- **NAS Identifier** — string identifier sent in the NAS-Identifier attribute (default: `macforge-nad`)
+- **CoA Port** — UDP port for the CoA listener (default: 1700, matching Cisco IOS-XE default)
+
+**ISE network device setup:** ISE must have a network device definition matching the NAS IP and shared secret. Use the **Register NAD** button to auto-create a `/32` device in ISE via ERS API, or configure it manually in ISE under `Administration > Network Resources > Network Devices`. The **Test RADIUS** button sends a test MAB request to verify connectivity.
+
+### Live sessions and CoA testing
+
+Setting **Session Lifetime** to anything other than "Immediate" keeps the Acct-Start open, maintaining an active session in ISE's live sessions table. While a session is live:
+
+- ISE can send CoA Disconnect or Re-authentication requests to MACforge's CoA listener
+- The **Live Sessions** panel shows all active sessions with their assigned IP and session ID
+- Click a session to send a manual Acct-Stop, or wait for the configured lifetime to expire
+- The **CoA Events** panel logs all incoming CoA requests with type, source, and result
+
+The **Disconnect Cause** selector controls the `Acct-Terminate-Cause` value sent in the Acct-Stop packet, letting you simulate specific termination scenarios (Lost Carrier, Session Timeout, Admin Reset, Lost Power).
+
+### Bulk session generation
+
+Set **Session Count** > 1 to run a bulk job. Additional controls appear in **Bulk Options**:
+
+- **Concurrency** — number of sessions running in parallel (start low for PEAP/EAP-TLS; see below)
+- **Inter-session delay** — throttle the launch rate to avoid overwhelming ISE
+- **Bulk source** — random OUI, device profile (uses YAML profile OUIs and DHCP hints), or category-based
+- **Session lifetime** — whether sessions terminate immediately or stay live for CoA testing
+
+Each bulk run is recorded in the **Job History** panel with accept/reject/error counts, duration, and a repeat button to re-run the same job.
+
+> **PEAP/EAP-TLS concurrency note:** Each concurrent PEAP or EAP-TLS session spawns an `eapol_test` subprocess (~15–25 MB RAM, TLS CPU cost). Keep concurrency at 20–50 on typical hardware. MAB and PAP are pure UDP and can run at much higher concurrency.
+
+### Credential and MAC dictionaries
+
+The **Dictionaries** panel lets you pre-load lists of credentials or MAC addresses to cycle through during bulk runs:
+
+- Add entries manually, or import a CSV (format: `username,password` for credentials; one MAC per line for MACs)
+- Enable **Use credential dictionary** or **Use MAC dictionary** in Bulk Options to have the bulk runner cycle through stored entries instead of generating random ones
+- Dictionaries persist across container restarts in the data volume
+
+### Custom RADIUS attributes
+
+The **Custom RADIUS Attributes** panel lets you inject additional attributes into authentication and/or accounting packets. Attributes are selected from a catalog parsed from embedded RFC 2865/2866/2867/2868/2869 and vendor (Cisco, Microsoft) dictionaries — no free-form attribute IDs required.
+
+Each attribute specifies:
+- **Name** — selected from the catalog (e.g. `Tunnel-Pvt-Group-Id`, `Cisco-AVPair`)
+- **Value** — sent exactly as entered
+- **Apply to** — Auth packets, Accounting-Start, Accounting-Stop, or all
+
+Custom attributes are appended to the standard attributes MACforge sends. `Cisco-AVPair` entries are merged (not replaced) with the `subscriber:` DHCP profiling hints already present in accounting packets. A warning is shown if a custom attribute conflicts with one MACforge manages internally (e.g. `NAS-Port-Id`, `Framed-IP-Address`).
+
+Named attribute sets can be saved and reloaded for common test scenarios.
+
+### Profiling hints in accounting packets
+
+For MAB sessions with a device profile selected, MACforge sends DHCP profiling attributes in the Acct-Start packet using `Cisco-AVPair` with the `subscriber:` namespace:
+
+```
+subscriber:dhcp-class-identifier=<vendor_class>
+subscriber:dhcp-hostname=<hostname>
+subscriber:dhcp-parameter-request-list=<options>
+subscriber:dhcp-client-identifier=<client-id>
+```
+
+This mimics what a Cisco IOS-XE switch sends when Device Sensor is enabled, allowing ISE to profile the endpoint based on DHCP fingerprint data without requiring actual DHCP traffic.
+
+---
 
 ## MAC Address Generation
 
@@ -273,6 +396,8 @@ On hosts with two physical NICs, both interfaces are auto-detected: the NIC with
 
 The REST API is consumed internally by the web UI. The endpoints below are the most useful for debugging and scripting from outside the UI:
 
+**Device Emulator**
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/devices` | List all devices with current status |
@@ -284,11 +409,42 @@ The REST API is consumed internally by the web UI. The endpoints below are the m
 | PUT | `/api/devices/{mac}/auth` | Set/update 802.1X config |
 | DELETE | `/api/devices/{mac}/auth` | Remove 802.1X config (revert to MAB) |
 | GET | `/api/dot1x/readiness` | Probe all EAP method binaries and report status |
-| GET | `/api/logs?limit=N` | Recent packet log entries |
+| GET | `/api/logs?limit=N` | Recent activity log entries |
 | GET | `/api/interface` | Active interface info and MAC seed fingerprint |
 | GET | `/api/interfaces` | All available network interfaces on the host |
 
-Full API documentation (all 50+ routes) is in [docs/architecture.md](docs/architecture.md).
+**NAD Emulator**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/radius/config` | Get NAD emulator configuration |
+| POST | `/api/radius/config` | Save NAD emulator configuration |
+| POST | `/api/radius/test` | Send a test MAB request to verify RADIUS connectivity |
+| POST | `/api/radius/register-nad` | Auto-register MACforge as a network device in ISE via ERS |
+| DELETE | `/api/radius/register-nad` | Remove the MACforge network device from ISE |
+| POST | `/api/radius/run` | Run a single session (MAB / PAP / PEAP / EAP-TLS) |
+| GET | `/api/radius/sessions` | List recent session results |
+| DELETE | `/api/radius/sessions` | Clear session result history |
+| POST | `/api/radius/bulk/start` | Start a bulk session run |
+| GET | `/api/radius/bulk/status` | Poll bulk run progress |
+| POST | `/api/radius/bulk/cancel` | Cancel an in-progress bulk run |
+| GET | `/api/radius/jobs` | List bulk job history |
+| DELETE | `/api/radius/jobs` | Clear completed jobs |
+| POST | `/api/radius/jobs/{id}/repeat` | Re-run a previous bulk job |
+| GET | `/api/radius/live-sessions` | List currently live (Acct-Start sent) sessions |
+| POST | `/api/radius/live-sessions/{id}/terminate` | Send Acct-Stop for a live session |
+| POST | `/api/radius/live-sessions/terminate-all` | Terminate all live sessions |
+| GET | `/api/radius/coa-events` | List received CoA events |
+| GET | `/api/radius/dicts/credentials` | List stored credential dictionary entries |
+| POST | `/api/radius/dicts/credentials` | Add a credential entry |
+| DELETE | `/api/radius/dicts/credentials/{id}` | Remove a credential entry |
+| POST | `/api/radius/dicts/credentials/import` | Bulk import credentials from CSV |
+| GET | `/api/radius/dicts/macs` | List stored MAC dictionary entries |
+| POST | `/api/radius/dicts/macs` | Add a MAC entry |
+| GET | `/api/radius/attrs/catalog` | Return the RADIUS attribute catalog (RFC + vendor) |
+| GET | `/api/radius/attrs/sets` | List saved attribute sets |
+| POST | `/api/radius/attrs/sets` | Save a named attribute set |
+| DELETE | `/api/radius/attrs/sets/{name}` | Delete a saved attribute set |
 
 ## Troubleshooting & Debugging
 
@@ -457,6 +613,35 @@ sudo apt install tshark -y
 sudo tshark -i eth0 -Y eapol -T fields \
   -e eth.src -e eth.dst -e eap.code -e eap.type -e eap.identity 2>/dev/null
 ```
+
+### NAD Emulator troubleshooting
+
+**Test RADIUS fails / no ISE live log entry**
+- Confirm the ISE PSN IP and shared secret are correct in NAD Configuration
+- Confirm a network device entry exists in ISE matching the NAS IP you configured (`Administration > Network Resources > Network Devices`)
+- The NAS IP MACforge sends must exactly match the IP of the network device entry in ISE — use the **Detect** button to auto-fill your host's IP
+- Verify UDP 1812 is reachable: `nc -u -z <ise-psn-ip> 1812`
+
+**PEAP / EAP-TLS returns `eapol_test not found`**
+```bash
+docker exec macforge which eapol_test
+# If missing, rebuild the image:
+docker compose build && docker compose up -d
+```
+
+**EAP-TLS fails with `no certificate or crl found`**
+- Leave **Validate ISE server certificate** unchecked unless you specifically need it — this is correct for lab environments with self-signed ISE certs
+- If validation is enabled, the selected ISE CA cert must be the CA that signed ISE's EAP TLS certificate (not the client CA)
+
+**CoA requests not reaching MACforge**
+- ISE sends CoA to the NAS IP on UDP port 1700 by default — verify the CoA port in NAD Configuration matches
+- Confirm no firewall blocks inbound UDP 1700 on the MACforge host: `sudo ufw status` or `iptables -L`
+- The network device profile in ISE must be set to **Cisco** for the CoA port (1700) to match
+
+**Bulk PEAP/EAP-TLS sessions failing or slow**
+- Reduce concurrency — each concurrent EAP session spawns an `eapol_test` subprocess
+- Check available memory: `docker stats macforge`
+- Review per-session detail in the Session Results table for the actual error (timeout, wrong password, cert error, etc.)
 
 ### Quick health check sequence
 

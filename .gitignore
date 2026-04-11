@@ -143,3 +143,6 @@ terraform.rc
 tmp/
 temp/
 .tmp/
+
+# Local notes and internal docs (not for distribution)
+docs/

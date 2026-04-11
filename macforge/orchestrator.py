@@ -157,7 +157,7 @@ class Orchestrator:
         self._arp_responder: Optional[AsyncSniffer] = None
         self._icmp_responder: Optional[AsyncSniffer] = None
         self._snmp_responder: Optional[AsyncSniffer] = None
-        self.snmp_enabled: bool = False
+        self.snmp_enabled: bool = True
         self._ip_to_device: dict[str, DeviceInstance] = {}
 
         for p in profiles:

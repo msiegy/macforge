@@ -13,6 +13,38 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from macforge.radius_nad import (
+    CustomAttr,
+    RADIUSNADConfig,
+    RADIUSSessionResult,
+    cancel_bulk,
+    clear_coa_events,
+    clear_completed_jobs,
+    clear_session_log,
+    delete_job,
+    delete_attr_set,
+    export_sessions_csv,
+    get_attr_catalog,
+    get_attr_sets,
+    get_bulk_state,
+    get_coa_events,
+    get_jobs,
+    get_live_sessions,
+    get_session_log,
+    load_radius_nad_config,
+    register_nad_in_ise,
+    remove_nad_from_ise,
+    restart_coa_listener,
+    run_bulk_sessions,
+    run_single_session,
+    save_attr_set,
+    save_radius_nad_config,
+    start_coa_listener,
+    terminate_all_live_sessions,
+    terminate_live_session,
+    test_radius_connection_sync,
+    _coa_event_queue,
+)
 from macforge.certgen import (
     generate_client_cert,
     generate_csr,
@@ -49,6 +81,18 @@ from macforge.models import (
     PacketLogEntry,
     PingResult,
 )
+from macforge.radius_dicts import (
+    add_credential,
+    add_mac,
+    clear_credentials,
+    clear_macs,
+    delete_credential,
+    delete_mac,
+    import_credentials_csv,
+    import_macs_csv,
+    load_credentials,
+    load_macs,
+)
 from macforge.orchestrator import Orchestrator
 from macforge.profiles import generate_mac, get_oui_table, get_seed_fingerprint
 from macforge.dot1x import check_wpa_supplicant_version
@@ -74,6 +118,10 @@ _orchestrator: Orchestrator | None = None
 async def _startup_checks() -> None:
     """Run pre-flight diagnostics on server start."""
     await check_wpa_supplicant_version()
+    # Start CoA listener if enabled in saved config
+    cfg = load_radius_nad_config()
+    if cfg.coa_enabled and cfg.ise_radius_ip and cfg.shared_secret:
+        asyncio.create_task(start_coa_listener(cfg))
 
 
 def set_orchestrator(orch: Orchestrator) -> None:
@@ -1324,6 +1372,648 @@ async def set_data_interface(payload: SetDataInterfacePayload):
 @app.get("/api/vendor-ouis")
 async def vendor_ouis():
     return get_oui_table()
+
+
+# ─── RADIUS NAD Emulator ─────────────────────────────────────────────
+
+
+class RADIUSNADConfigPayload(BaseModel):
+    ise_radius_ip: str = ""
+    radius_port: int = 1812
+    acct_port: int = 1813
+    shared_secret: str = ""
+    nas_ip: str = ""
+    nas_identifier: str = "macforge-nad"
+    coa_port: int = 1700
+    coa_enabled: bool = False
+
+
+@app.get("/api/radius/config")
+async def get_radius_config():
+    cfg = load_radius_nad_config()
+    return {
+        "ise_radius_ip": cfg.ise_radius_ip,
+        "radius_port": cfg.radius_port,
+        "acct_port": cfg.acct_port,
+        "shared_secret": "••••••••" if cfg.shared_secret else "",
+        "nas_ip": cfg.nas_ip,
+        "nas_identifier": cfg.nas_identifier,
+        "coa_port": cfg.coa_port,
+        "coa_enabled": cfg.coa_enabled,
+        "configured": bool(cfg.ise_radius_ip and cfg.shared_secret and cfg.nas_ip),
+    }
+
+
+@app.put("/api/radius/config")
+async def update_radius_config(payload: RADIUSNADConfigPayload):
+    cfg = RADIUSNADConfig(**payload.model_dump())
+    save_radius_nad_config(cfg)
+    # Restart CoA listener with new settings
+    restart_coa_listener(cfg)
+    return {"status": "saved"}
+
+
+@app.get("/api/radius/profiles")
+async def get_radius_profiles():
+    """Return device profiles (name, mac, oui, category, device_type) for the NAD emulator."""
+    from macforge.profiles import load_profiles
+    profiles = load_profiles()
+    result = []
+    for p in profiles:
+        oui = ":".join(p.mac.upper().split(":")[:3])
+        result.append({
+            "name": p.name,
+            "mac": p.mac,
+            "oui": oui,
+            "category": p.personality.category,
+            "device_type": p.personality.device_type,
+            "os": p.personality.os,
+            "dhcp_hostname": p.dhcp.hostname,
+            "dhcp_vendor_class": p.dhcp.vendor_class,
+            "auth_method": p.auth.method if p.auth else None,
+        })
+    return result
+
+
+class IssueCertPayload(BaseModel):
+    cn: str
+    san_emails: list[str] = []
+    ca_cert_file: str = "lab-ca.pem"
+    ca_key_file: str = "lab-ca.key"
+    days: int = 3650
+
+
+@app.get("/api/radius/certs")
+async def list_radius_certs():
+    """List PEM files in the certs directory with metadata."""
+    from macforge.radius_nad import list_available_certs
+    return list_available_certs()
+
+
+@app.post("/api/radius/certs/issue")
+async def issue_radius_cert(payload: IssueCertPayload):
+    """Issue a new client certificate signed by the lab CA for EAP-TLS."""
+    from macforge.certgen import generate_client_cert
+    loop = asyncio.get_event_loop()
+    try:
+        info = await loop.run_in_executor(
+            None,
+            lambda: generate_client_cert(
+                cn=payload.cn,
+                san_list=payload.san_emails or None,
+                ca_cert_file=payload.ca_cert_file,
+                ca_key_file=payload.ca_key_file,
+                days=payload.days,
+            ),
+        )
+        return {"status": "ok", **info}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/radius/local-ip")
+async def get_radius_local_ip():
+    """Return the host IP that ISE will see as the UDP source of RADIUS packets."""
+    from macforge.radius_nad import _local_ip
+    return {"ip": _local_ip()}
+
+
+@app.post("/api/radius/test")
+async def test_radius_connection():
+    cfg = load_radius_nad_config()
+    if not cfg.ise_radius_ip or not cfg.shared_secret:
+        return {"status": "error", "message": "RADIUS NAD not configured — set ISE IP, shared secret, and NAS-IP first"}
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, test_radius_connection_sync, cfg)
+
+
+class RunSessionPayload(BaseModel):
+    auth_type: str = "mab"
+    mac: str = ""
+    oui_prefix: str = ""        # when MAC blank, randomise within this OUI (e.g. "64:4E:D7")
+    username: str = ""
+    password: str = ""
+    nas_port: int = 1
+    # Session lifetime:
+    #   -1 = immediate (Acct-Start + Stop back-to-back, for bulk/report-only)
+    #    0 = live until manually terminated (default for single sessions — CoA testing)
+    #   >0 = live for N seconds then auto-terminate
+    session_lifetime_secs: int = 0
+    # EAP-TLS
+    cert_file: str = ""
+    key_file: str = ""
+    validate_server_cert: bool = False
+    ise_ca_cert_file: str = ""
+    # MAB profiling: name of the device profile whose DHCP/vendor attributes to
+    # send as subscriber: Cisco-AVPairs in Accounting-Start to assist ISE profiling.
+    profile_name: str = ""
+    # Termination cause for live sessions ("auto" = best-fit per trigger)
+    # Accepted: "auto", "User-Request", "Lost-Carrier", "Session-Timeout",
+    #           "Admin-Reset", "Lost-Power"
+    terminate_cause: str = "auto"
+    # User-defined custom RADIUS attributes to inject into session packets
+    custom_attrs: list[CustomAttr] = []
+
+
+@app.post("/api/radius/run-session")
+async def api_run_session(payload: RunSessionPayload):
+    from macforge.profiles import load_profiles
+    cfg = load_radius_nad_config()
+    if not cfg.ise_radius_ip or not cfg.shared_secret:
+        raise HTTPException(status_code=400, detail="RADIUS NAD not configured")
+    if payload.auth_type not in ("mab", "pap", "peap", "eap-tls"):
+        raise HTTPException(status_code=400, detail="auth_type must be: mab, pap, peap, eap-tls")
+
+    # Resolve profiling attributes from the selected profile
+    profile_attrs: dict | None = None
+    if payload.profile_name and payload.auth_type == "mab":
+        profiles = load_profiles()
+        matched = next((p for p in profiles if p.name == payload.profile_name), None)
+        if matched:
+            profile_attrs = {
+                "vendor_class": matched.dhcp.vendor_class if matched.dhcp else "",
+                "hostname": matched.dhcp.hostname if matched.dhcp else "",
+                "param_request_list": (
+                    matched.dhcp.param_request_list if matched.dhcp else []
+                ),
+                "profile_name": matched.name,
+            }
+
+    result = await run_single_session(
+        cfg=cfg,
+        auth_type=payload.auth_type,   # type: ignore[arg-type]
+        mac=payload.mac,
+        oui_prefix=payload.oui_prefix,
+        username=payload.username,
+        password=payload.password,
+        nas_port=payload.nas_port,
+        session_lifetime_secs=payload.session_lifetime_secs,
+        cert_file=payload.cert_file,
+        key_file=payload.key_file,
+        validate_server_cert=payload.validate_server_cert,
+        ise_ca_cert_file=payload.ise_ca_cert_file,
+        profile_attrs=profile_attrs,
+        terminate_cause=payload.terminate_cause,
+        custom_attrs=payload.custom_attrs or [],
+    )
+
+    # Log to Activity Log so NAD emulator sessions appear alongside device events.
+    import time as _time
+    identity = result.username or result.mac
+    detail_str = result.detail or result.acct_session_id or ""
+    _get_orch().packet_log.appendleft(PacketLogEntry(
+        timestamp=_time.time(),
+        device_name="NAD Emulator",
+        mac=result.mac,
+        packet_type=f"RADIUS {result.auth_type.upper()}",
+        detail=f"{result.result.upper()} — {identity} — {detail_str}".rstrip(" —"),
+    ))
+
+    return result.model_dump()
+
+
+@app.get("/api/radius/sessions")
+async def get_radius_sessions(limit: int = 200):
+    sessions = get_session_log()
+    return [s.model_dump() for s in sessions[:limit]]
+
+
+@app.delete("/api/radius/sessions")
+async def delete_radius_sessions():
+    clear_session_log()
+    return {"status": "cleared"}
+
+
+@app.get("/api/radius/live-sessions")
+async def api_get_live_sessions():
+    """Return currently live sessions (Acct-Start sent, Acct-Stop not yet sent)."""
+    return get_live_sessions()
+
+
+@app.delete("/api/radius/live-sessions/{session_id}")
+async def api_terminate_live_session(session_id: str):
+    """Send Acct-Stop for a specific live session and remove it."""
+    terminated = await terminate_live_session(session_id, "User-Request")
+    if not terminated:
+        raise HTTPException(status_code=404, detail="Live session not found")
+    return {"status": "terminated", "acct_session_id": session_id}
+
+
+@app.delete("/api/radius/live-sessions")
+async def api_terminate_all_live_sessions():
+    """Send Acct-Stop for all live sessions."""
+    count = await terminate_all_live_sessions("User-Request")
+    return {"status": "terminated", "count": count}
+
+
+@app.get("/api/radius/sessions/export")
+async def export_radius_sessions():
+    csv_data = export_sessions_csv()
+    return StreamingResponse(
+        iter([csv_data]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="radius_sessions.csv"'},
+    )
+
+
+class BulkRunPayload(BaseModel):
+    auth_type: str = "mab"
+    count: int = 10
+    concurrency: int = 5
+    delay_ms: int = 0
+    base_mac: str = ""
+    # bulk_source controls how MACs (and profiling hints) are generated:
+    #   "random"   – random OUI DE:AD:BE (legacy default)
+    #   "category" – random OUI from a specific device category (uses device_category)
+    #   "profiles" – randomly selects from all YAML device profiles per session
+    bulk_source: str = "random"
+    device_category: str = ""       # used when bulk_source == "category"
+    username_template: str = "user{n}@lab.local"
+    password: str = ""
+    session_lifetime_secs: int = -1  # default: immediate close (don't flood live-sessions)
+    # EAP-TLS bulk (same cert for all sessions; machine/device cert scenario)
+    cert_file: str = ""
+    key_file: str = ""
+    validate_server_cert: bool = False
+    ise_ca_cert_file: str = ""
+    # Termination cause for live sessions ("auto" = best-fit per trigger)
+    terminate_cause: str = "auto"
+    # User-defined custom RADIUS attributes applied to every session in the bulk run
+    custom_attrs: list[CustomAttr] = []
+    # Dictionary integration — when True, cycles through stored dictionaries
+    # instead of using username_template/password or random MACs
+    credential_dict: bool = False
+    mac_dict: bool = False
+
+
+@app.post("/api/radius/bulk/start")
+async def start_bulk_run(payload: BulkRunPayload):
+    from macforge.profiles import VENDOR_OUIS, load_profiles
+    import random as _rnd
+    cfg = load_radius_nad_config()
+    if not cfg.ise_radius_ip or not cfg.shared_secret:
+        raise HTTPException(status_code=400, detail="RADIUS NAD not configured")
+    bulk = get_bulk_state()
+    if bulk["running"]:
+        raise HTTPException(status_code=409, detail="A bulk run is already in progress")
+    if payload.count < 1 or payload.count > 10000:
+        raise HTTPException(status_code=400, detail="count must be 1–10000")
+    if payload.concurrency < 1 or payload.concurrency > 200:
+        raise HTTPException(status_code=400, detail="concurrency must be 1–200")
+    if payload.auth_type == "eap-tls" and (not payload.cert_file or not payload.key_file):
+        raise HTTPException(status_code=400, detail="cert_file and key_file are required for EAP-TLS bulk runs")
+
+    oui_prefix = ""
+    profile_pool: list[dict] | None = None
+    username_template = payload.username_template
+    password = payload.password
+    base_mac = payload.base_mac
+
+    # Credential dictionary overrides username_template + password
+    if payload.credential_dict and payload.auth_type in ("pap", "peap", "eap-tls"):
+        creds = load_credentials()
+        if not creds:
+            raise HTTPException(
+                status_code=400,
+                detail="Credential dictionary is empty — add entries in the Dictionaries panel first"
+            )
+        # Build a template-like cycle using Python format string substitution by index
+        # We pass creds as a profile_pool-like mechanism via the MAC dict approach below.
+        # For simplicity, expand the list into a pool list here and pass via username_template.
+        # Since run_bulk_sessions doesn't natively support credential cycling, we encode
+        # the N-th credential into username_template and password via a lookup table stored
+        # in the job params — the bulk runner uses {n} which we can post-process.
+        # A cleaner approach: pre-build a list and pass inline. For now, we pass the creds
+        # list and let bulk runner pick by index via username_template = "DICT:{n}".
+        # We'll handle this by expanding the count to the dict length if count > len(creds),
+        # then pass a pool param. Simplest implementation: export creds as pool.
+        pass  # Dict cycling is handled in the bulk runner via credential_pool below
+
+    # MAC dictionary overrides oui_prefix for MAB
+    mac_pool: list[str] | None = None
+    if payload.mac_dict and payload.auth_type == "mab":
+        macs = load_macs()
+        if not macs:
+            raise HTTPException(
+                status_code=400,
+                detail="MAC dictionary is empty — add entries in the Dictionaries panel first"
+            )
+        mac_pool = [m["mac"] for m in macs]
+
+    if payload.bulk_source == "profiles" and payload.auth_type == "mab" and not mac_pool:
+        # Build a pool from all YAML device profiles — each session randomly picks one
+        all_profiles = load_profiles()
+        pool = []
+        for p in all_profiles:
+            mac_clean = p.mac.lower().replace(":", "").replace("-", "")
+            # Use first 6 hex chars as OUI (AA:BB:CC format)
+            oui = ":".join(mac_clean[i:i+2].upper() for i in range(0, 6, 2)) if len(mac_clean) >= 6 else "DE:AD:BE"
+            pool.append({
+                "oui": oui,
+                "vendor_class": p.dhcp.vendor_class if p.dhcp else "",
+                "hostname": p.dhcp.hostname if p.dhcp else "",
+                "param_request_list": p.dhcp.param_request_list if p.dhcp else [],
+                "profile_name": p.name,
+            })
+        if pool:
+            profile_pool = pool
+    elif payload.bulk_source == "category" and payload.device_category and not mac_pool:
+        if payload.device_category in VENDOR_OUIS:
+            entries = VENDOR_OUIS[payload.device_category]
+            oui_prefix = _rnd.choice(entries)["oui"]
+
+    # Build credential pool for cycling (PAP/PEAP with credential_dict)
+    cred_pool: list[dict] | None = None
+    if payload.credential_dict and payload.auth_type in ("pap", "peap", "eap-tls"):
+        creds = load_credentials()
+        if creds:
+            cred_pool = creds
+
+    import time as _time
+    import uuid as _uuid
+    job_id = str(_uuid.uuid4())[:8].upper()
+
+    async def _bulk_task() -> None:
+        orch = _get_orch()
+        orch.packet_log.appendleft(PacketLogEntry(
+            timestamp=_time.time(),
+            device_name="NAD Emulator",
+            mac="—",
+            packet_type=f"RADIUS Bulk {payload.auth_type.upper()}",
+            detail=f"Started — {payload.count} sessions · concurrency {payload.concurrency}",
+        ))
+        await run_bulk_sessions(
+            cfg=cfg,
+            auth_type=payload.auth_type,    # type: ignore[arg-type]
+            count=payload.count,
+            concurrency=payload.concurrency,
+            delay_ms=payload.delay_ms,
+            base_mac=base_mac,
+            oui_prefix=oui_prefix,
+            username_template=username_template,
+            password=password,
+            cert_file=payload.cert_file,
+            key_file=payload.key_file,
+            validate_server_cert=payload.validate_server_cert,
+            ise_ca_cert_file=payload.ise_ca_cert_file,
+            profile_pool=profile_pool,
+            session_lifetime_secs=payload.session_lifetime_secs,
+            terminate_cause=payload.terminate_cause,
+            job_id=job_id,
+            job_params=payload.model_dump(),
+            mac_pool=mac_pool,
+            cred_pool=cred_pool,
+            custom_attrs=payload.custom_attrs or [],
+        )
+        # Log completion summary using the finished job record.
+        jobs = get_jobs()
+        job = next((j for j in jobs if j.get("job_id") == job_id), None)
+        if job:
+            orch.packet_log.appendleft(PacketLogEntry(
+                timestamp=_time.time(),
+                device_name="NAD Emulator",
+                mac="—",
+                packet_type=f"RADIUS Bulk {payload.auth_type.upper()}",
+                detail=(
+                    f"{job.get('status', '').upper()} — "
+                    f"{job.get('accepted', 0)} accept · "
+                    f"{job.get('rejected', 0)} reject · "
+                    f"{job.get('errors', 0)} error"
+                ),
+            ))
+
+    asyncio.create_task(_bulk_task())
+    return {"status": "started", "total": payload.count, "job_id": job_id}
+
+
+@app.get("/api/radius/bulk/status")
+async def get_bulk_status():
+    return get_bulk_state()
+
+
+@app.post("/api/radius/bulk/cancel")
+async def cancel_bulk_run():
+    cancel_bulk()
+    return {"status": "cancelling"}
+
+
+@app.get("/api/radius/jobs")
+async def api_get_jobs():
+    """Return all bulk job history records, newest first."""
+    return get_jobs()
+
+
+@app.delete("/api/radius/jobs")
+async def api_clear_completed_jobs():
+    """Remove all completed/cancelled/failed jobs from history."""
+    removed = clear_completed_jobs()
+    return {"status": "cleared", "removed": removed}
+
+
+@app.delete("/api/radius/jobs/{job_id}")
+async def api_delete_job(job_id: str):
+    """Remove a specific job from history."""
+    deleted = delete_job(job_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": "deleted", "job_id": job_id}
+
+
+@app.post("/api/radius/jobs/{job_id}/repeat")
+async def api_repeat_job(job_id: str):
+    """Re-run a previous bulk job with the same parameters."""
+    jobs = get_jobs()
+    job = next((j for j in jobs if j["job_id"] == job_id), None)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    params = job.get("params", {})
+    if not params:
+        raise HTTPException(status_code=400, detail="Job has no saved parameters")
+    # Re-submit via the same bulk start logic
+    payload = BulkRunPayload(**params)
+    return await start_bulk_run(payload)
+
+
+# ─── Dictionary API ──────────────────────────────────────────────────
+
+class CredentialEntry(BaseModel):
+    username: str
+    password: str
+
+
+class MacEntry(BaseModel):
+    mac: str
+
+
+class ImportCsvPayload(BaseModel):
+    csv_text: str
+
+
+@app.get("/api/radius/dicts/credentials")
+async def api_get_credentials():
+    return load_credentials()
+
+
+@app.post("/api/radius/dicts/credentials")
+async def api_add_credential(entry: CredentialEntry):
+    return add_credential(entry.username, entry.password)
+
+
+@app.delete("/api/radius/dicts/credentials")
+async def api_clear_credentials():
+    count = clear_credentials()
+    return {"status": "cleared", "count": count}
+
+
+@app.delete("/api/radius/dicts/credentials/{entry_id}")
+async def api_delete_credential(entry_id: str):
+    deleted = delete_credential(entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential entry not found")
+    return {"status": "deleted"}
+
+
+@app.post("/api/radius/dicts/credentials/import")
+async def api_import_credentials(payload: ImportCsvPayload):
+    added = import_credentials_csv(payload.csv_text)
+    return {"status": "imported", "added": added}
+
+
+@app.get("/api/radius/dicts/macs")
+async def api_get_macs():
+    return load_macs()
+
+
+@app.post("/api/radius/dicts/macs")
+async def api_add_mac(entry: MacEntry):
+    return add_mac(entry.mac)
+
+
+@app.delete("/api/radius/dicts/macs")
+async def api_clear_macs():
+    count = clear_macs()
+    return {"status": "cleared", "count": count}
+
+
+@app.delete("/api/radius/dicts/macs/{entry_id}")
+async def api_delete_mac(entry_id: str):
+    deleted = delete_mac(entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="MAC entry not found")
+    return {"status": "deleted"}
+
+
+@app.post("/api/radius/dicts/macs/import")
+async def api_import_macs(payload: ImportCsvPayload):
+    added = import_macs_csv(payload.csv_text)
+    return {"status": "imported", "added": added}
+
+
+# ─── Attribute Customization API ─────────────────────────────────────
+
+@app.get("/api/radius/attrs/catalog")
+async def api_get_attr_catalog():
+    """Return all RADIUS attribute definitions from the embedded dictionary."""
+    return get_attr_catalog()
+
+
+class AttrSetPayload(BaseModel):
+    name: str
+    attrs: list[CustomAttr]
+
+
+@app.get("/api/radius/attrs/sets")
+async def api_get_attr_sets():
+    return get_attr_sets()
+
+
+@app.post("/api/radius/attrs/sets")
+async def api_save_attr_set(payload: AttrSetPayload):
+    save_attr_set(payload.name, [a.model_dump() for a in payload.attrs])
+    return {"status": "saved", "name": payload.name}
+
+
+@app.delete("/api/radius/attrs/sets/{name}")
+async def api_delete_attr_set(name: str):
+    deleted = delete_attr_set(name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Attribute set not found")
+    return {"status": "deleted", "name": name}
+
+
+@app.delete("/api/radius/coa-events")
+async def api_clear_coa_events():
+    """Clear all buffered CoA events."""
+    clear_coa_events()
+    return {"status": "cleared"}
+
+
+@app.get("/api/radius/coa-events")
+async def stream_coa_events():
+    """Server-Sent Events stream for live CoA events from ISE."""
+    async def _event_generator():
+        # Send any buffered events first
+        for event in reversed(list(get_coa_events())[:20]):
+            yield f"data: {event.model_dump_json()}\n\n"
+
+        while True:
+            try:
+                event = await asyncio.wait_for(_coa_event_queue.get(), timeout=30)
+                yield f"data: {event.model_dump_json()}\n\n"
+            except asyncio.TimeoutError:
+                yield "data: {\"ping\":true}\n\n"
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/radius/bulk/progress")
+async def stream_bulk_progress():
+    """SSE stream for bulk run progress updates."""
+    async def _progress_generator():
+        while True:
+            state = get_bulk_state()
+            import json as _json
+            yield f"data: {_json.dumps(state)}\n\n"
+            if not state["running"]:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        _progress_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/radius/ise/register-nad")
+async def api_register_nad():
+    from macforge.ise_api import load_ise_config as _load_ise
+    ise_cfg = _load_ise()
+    radius_cfg = load_radius_nad_config()
+    if not ise_cfg.hostname or not ise_cfg.username:
+        raise HTTPException(status_code=400, detail="ISE REST not configured — add hostname in the Certificates tab")
+    if not radius_cfg.nas_ip or not radius_cfg.shared_secret:
+        raise HTTPException(status_code=400, detail="RADIUS NAD not configured — set NAS-IP and shared secret first")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, register_nad_in_ise, ise_cfg, radius_cfg)
+
+
+@app.delete("/api/radius/ise/register-nad")
+async def api_remove_nad():
+    from macforge.ise_api import load_ise_config as _load_ise
+    ise_cfg = _load_ise()
+    radius_cfg = load_radius_nad_config()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, remove_nad_from_ise, ise_cfg, radius_cfg)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
